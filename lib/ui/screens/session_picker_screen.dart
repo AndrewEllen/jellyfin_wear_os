@@ -1,7 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../../core/constants/jellyfin_constants.dart';
 import '../../core/theme/wear_theme.dart';
 import '../../core/utils/watch_shape.dart';
+import '../../data/models/session_device.dart';
 import '../../navigation/app_router.dart';
+import '../../state/remote_state.dart';
+import '../../state/session_state.dart';
 import '../widgets/common/wear_list_view.dart';
 
 /// Screen for selecting a target Jellyfin session to control.
@@ -13,29 +19,35 @@ class SessionPickerScreen extends StatefulWidget {
 }
 
 class _SessionPickerScreenState extends State<SessionPickerScreen> {
-  bool _isLoading = true;
-  final List<_SessionDevice> _sessions = [];
-
   @override
   void initState() {
     super.initState();
-    _loadSessions();
-  }
 
-  Future<void> _loadSessions() async {
-    // TODO: Load active sessions from Jellyfin API
-    await Future.delayed(const Duration(milliseconds: 500));
-
-    if (!mounted) return;
-
-    setState(() {
-      _isLoading = false;
-      // TODO: Populate with actual sessions from API
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      await context.read<SessionState>().refreshSessions();
     });
   }
 
-  void _selectSession(_SessionDevice session) {
-    // TODO: Store selected session and navigate to remote
+  Future<void> _selectSession(SessionDevice session) async {
+    JellyfinConstants.log(
+      'SessionPicker._selectSession(): '
+      'sessionId=${session.sessionId} '
+      'deviceName=${session.deviceName} '
+      'client=${session.client} '
+      'supportsRemoteControl=${session.supportsRemoteControl} '
+      'supportsMediaControl=${session.supportsMediaControl} '
+      'nowPlaying=${session.nowPlayingItemName}',
+    );
+
+    // Update both SessionState AND RemoteState with the target session
+    final sessionState = context.read<SessionState>();
+    final remoteState = context.read<RemoteState>();
+
+    await sessionState.setTargetSession(session);
+    remoteState.setTargetSession(session);
+
+    if (!mounted) return;
     Navigator.pushNamed(context, AppRoutes.remote);
   }
 
@@ -43,62 +55,81 @@ class _SessionPickerScreenState extends State<SessionPickerScreen> {
   Widget build(BuildContext context) {
     final padding = WatchShape.edgePadding(context);
 
-    if (_isLoading) {
-      return Scaffold(
-        backgroundColor: WearTheme.background,
-        body: const Center(
-          child: CircularProgressIndicator(),
-        ),
-      );
-    }
-
-    if (_sessions.isEmpty) {
-      return Scaffold(
-        backgroundColor: WearTheme.background,
-        body: Center(
-          child: Padding(
-            padding: padding,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  Icons.devices_outlined,
-                  size: 32,
-                  color: WearTheme.textSecondary,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'No Devices',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'No active Jellyfin\nclients found',
-                  style: Theme.of(context).textTheme.bodySmall,
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 16),
-                TextButton.icon(
-                  onPressed: _loadSessions,
-                  icon: const Icon(Icons.refresh, size: 18),
-                  label: const Text('Refresh'),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
     return Scaffold(
       backgroundColor: WearTheme.background,
-      body: WearListView(
-        children: [
-          // Header
-          _buildHeader(context, padding),
-          // Sessions
-          ..._sessions.map((session) => _buildSessionTile(context, session, padding)),
-        ],
+      body: Consumer<SessionState>(
+        builder: (context, state, _) {
+          if (state.isLoading) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          if (state.errorMessage != null && state.errorMessage!.isNotEmpty) {
+            return Center(
+              child: Padding(
+                padding: padding,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.error_outline, size: 32, color: WearTheme.textSecondary),
+                    const SizedBox(height: 8),
+                    Text('Failed to load sessions', style: Theme.of(context).textTheme.titleMedium),
+                    const SizedBox(height: 6),
+                    Text(
+                      state.errorMessage!,
+                      style: Theme.of(context).textTheme.bodySmall,
+                      textAlign: TextAlign.center,
+                      maxLines: 8,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 14),
+                    TextButton.icon(
+                      onPressed: () => context.read<SessionState>().refreshSessions(),
+                      icon: const Icon(Icons.refresh, size: 18),
+                      label: const Text('Refresh'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
+
+          final sessions = state.sessions;
+
+          if (sessions.isEmpty) {
+            return Center(
+              child: Padding(
+                padding: padding,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.devices_outlined, size: 32, color: WearTheme.textSecondary),
+                    const SizedBox(height: 8),
+                    Text('No Devices', style: Theme.of(context).textTheme.titleMedium),
+                    const SizedBox(height: 4),
+                    Text(
+                      'No active Jellyfin\nclients found',
+                      style: Theme.of(context).textTheme.bodySmall,
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 16),
+                    TextButton.icon(
+                      onPressed: () => context.read<SessionState>().refreshSessions(),
+                      icon: const Icon(Icons.refresh, size: 18),
+                      label: const Text('Refresh'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
+
+          return WearListView(
+            children: [
+              _buildHeader(context, padding),
+              ...sessions.map((s) => _buildSessionTile(context, s, padding)),
+            ],
+          );
+        },
       ),
     );
   }
@@ -112,16 +143,9 @@ class _SessionPickerScreenState extends State<SessionPickerScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
-                Icons.devices_outlined,
-                size: 28,
-                color: WearTheme.jellyfinPurple,
-              ),
+              const Icon(Icons.devices_outlined, size: 28, color: WearTheme.jellyfinPurple),
               const SizedBox(height: 8),
-              Text(
-                'Select Device',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
+              Text('Select Device', style: Theme.of(context).textTheme.titleLarge),
             ],
           ),
         ),
@@ -129,11 +153,12 @@ class _SessionPickerScreenState extends State<SessionPickerScreen> {
     );
   }
 
-  Widget _buildSessionTile(
-    BuildContext context,
-    _SessionDevice session,
-    EdgeInsets padding,
-  ) {
+  Widget _buildSessionTile(BuildContext context, SessionDevice session, EdgeInsets padding) {
+    final subtitleParts = <String>[];
+    if (session.client.isNotEmpty) subtitleParts.add(session.client);
+    if (session.userName != null && session.userName!.isNotEmpty) subtitleParts.add(session.userName!);
+    final subtitle = subtitleParts.isEmpty ? 'Jellyfin Client' : subtitleParts.join(' • ');
+
     return SizedBox(
       height: MediaQuery.of(context).size.height,
       child: Center(
@@ -151,11 +176,7 @@ class _SessionPickerScreenState extends State<SessionPickerScreen> {
               ),
               child: Row(
                 children: [
-                  Icon(
-                    session.icon,
-                    size: 28,
-                    color: WearTheme.jellyfinPurple,
-                  ),
+                  Icon(session.icon, size: 28, color: WearTheme.jellyfinPurple),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -169,11 +190,20 @@ class _SessionPickerScreenState extends State<SessionPickerScreen> {
                           overflow: TextOverflow.ellipsis,
                         ),
                         Text(
-                          session.client,
+                          subtitle,
                           style: Theme.of(context).textTheme.bodySmall,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
+                        if (session.nowPlayingItemName != null && session.nowPlayingItemName!.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            session.nowPlayingItemName!,
+                            style: Theme.of(context).textTheme.bodySmall,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -185,18 +215,4 @@ class _SessionPickerScreenState extends State<SessionPickerScreen> {
       ),
     );
   }
-}
-
-class _SessionDevice {
-  final String sessionId;
-  final String deviceName;
-  final String client;
-  final IconData icon;
-
-  _SessionDevice({
-    required this.sessionId,
-    required this.deviceName,
-    required this.client,
-    required this.icon,
-  });
 }

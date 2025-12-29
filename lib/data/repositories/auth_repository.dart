@@ -30,8 +30,8 @@ class AuthRepository {
       _client.setAuthentication(accessToken: authToken, userId: userId);
 
       // Verify the token is still valid by making a simple API call
-      final response = await _client.userApi?.getCurrentUser();
-      if (response?.data != null) {
+      final response = await _client.get('/Users/$userId');
+      if (response.statusCode == 200) {
         return true;
       }
     } catch (e) {
@@ -53,11 +53,12 @@ class AuthRepository {
     final result = await _client.login(username, password);
 
     if (result != null && _client.accessToken != null) {
+      final user = result['User'] as Map<String, dynamic>?;
       await _saveCredentials(
         serverUrl: serverUrl,
         authToken: _client.accessToken!,
         userId: _client.userId!,
-        userName: result.user?.name ?? username,
+        userName: user?['Name']?.toString() ?? username,
       );
       return true;
     }

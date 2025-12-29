@@ -53,18 +53,18 @@ class _LoginScreenState extends State<LoginScreen> {
       await appState.client.initialize(serverUrl);
 
       // Fetch public users from the server
-      final response = await appState.client.userApi?.getPublicUsers();
-      final users = response?.data ?? [];
+      final response = await appState.client.get('/Users/Public');
+      final users = response.data as List<dynamic>? ?? [];
 
       if (!mounted) return;
 
       setState(() {
         _publicUsers = users
             .map((u) => _PublicUser(
-                  id: u.id ?? '',
-                  name: u.name ?? 'Unknown',
-                  hasPassword: u.hasPassword ?? true,
-                  primaryImageTag: u.primaryImageTag,
+                  id: (u['Id'] ?? '').toString(),
+                  name: (u['Name'] ?? 'Unknown').toString(),
+                  hasPassword: u['HasPassword'] == true,
+                  primaryImageTag: u['PrimaryImageTag']?.toString(),
                   serverUrl: serverUrl,
                 ))
             .toList();

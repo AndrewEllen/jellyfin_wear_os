@@ -1,5 +1,4 @@
 import 'package:flutter/foundation.dart';
-import 'package:jellyfin_dart/jellyfin_dart.dart';
 
 import '../data/models/library_item.dart';
 import '../data/repositories/library_repository.dart';
@@ -73,15 +72,15 @@ class LibraryState extends ChangeNotifier {
     ));
 
     try {
-      List<BaseItemKind>? itemTypes;
+      List<String>? itemTypes;
 
       // Filter by media type if specified
       if (mediaType == 'movies') {
-        itemTypes = [BaseItemKind.movie];
+        itemTypes = ['Movie'];
       } else if (mediaType == 'tvshows') {
-        itemTypes = [BaseItemKind.series];
+        itemTypes = ['Series'];
       } else if (mediaType == 'music') {
-        itemTypes = [BaseItemKind.musicArtist];
+        itemTypes = ['MusicArtist'];
       }
 
       _items = await _repository.getItems(

@@ -2,6 +2,26 @@ import '../../core/constants/jellyfin_constants.dart';
 
 /// Model representing the current playback state of a session.
 class PlaybackState {
+  /// Safely converts an enum or dynamic value to a String.
+  static String? _asString(dynamic value) {
+    if (value == null) return null;
+    if (value is String) return value;
+
+    // Try Dart enum .name property first
+    try {
+      final dynamic d = value;
+      final n = d.name;
+      if (n is String) return n;
+    } catch (_) {
+      // ignore - not a Dart enum with .name
+    }
+
+    // Fallback: parse "EnumType.value" format
+    final s = value.toString();
+    final dot = s.lastIndexOf('.');
+    return dot >= 0 ? s.substring(dot + 1) : s;
+  }
+
   final int positionTicks;
   final int? durationTicks;
   final bool isPaused;
@@ -90,9 +110,10 @@ class PlaybackState {
     if (nowPlaying?.mediaStreams != null) {
       for (final stream in nowPlaying.mediaStreams!) {
         final mediaStream = MediaStream.fromDto(stream);
-        if (stream.type == 'Audio') {
+        final streamType = _asString(stream.type)?.toLowerCase();
+        if (streamType == 'audio') {
           audioStreams.add(mediaStream);
-        } else if (stream.type == 'Subtitle') {
+        } else if (streamType == 'subtitle') {
           subtitleStreams.add(mediaStream);
         }
       }
@@ -104,9 +125,9 @@ class PlaybackState {
       isPaused: playState?.isPaused ?? true,
       isMuted: playState?.isMuted ?? false,
       volumeLevel: playState?.volumeLevel ?? 100,
-      nowPlayingItemId: nowPlaying?.id,
+      nowPlayingItemId: _asString(nowPlaying?.id),
       nowPlayingItemName: nowPlaying?.name,
-      nowPlayingItemType: nowPlaying?.type,
+      nowPlayingItemType: _asString(nowPlaying?.type),
       nowPlayingArtist: nowPlaying?.albumArtist ??
           (nowPlaying?.artists?.isNotEmpty == true ? nowPlaying.artists!.first : null),
       nowPlayingAlbum: nowPlaying?.album,
@@ -114,7 +135,49 @@ class PlaybackState {
       subtitleStreams: subtitleStreams,
       audioStreamIndex: playState?.audioStreamIndex,
       subtitleStreamIndex: playState?.subtitleStreamIndex,
-      playMethod: playState?.playMethod,
+      playMethod: _asString(playState?.playMethod),
+    );
+  }
+
+  /// Creates a PlaybackState from raw JSON (Jellyfin uses PascalCase keys).
+  /// Use this to bypass jellyfin_dart's broken DTO parsing.
+  factory PlaybackState.fromJson(Map<String, dynamic> json) {
+    final playState = json['PlayState'] as Map<String, dynamic>?;
+    final nowPlaying = json['NowPlayingItem'] as Map<String, dynamic>?;
+
+    List<MediaStream> audioStreams = [];
+    List<MediaStream> subtitleStreams = [];
+
+    final mediaStreams = nowPlaying?['MediaStreams'] as List<dynamic>? ?? [];
+    for (final stream in mediaStreams) {
+      final ms = MediaStream.fromJson(stream as Map<String, dynamic>);
+      final streamType = ms.type.toLowerCase();
+      if (streamType == 'audio') {
+        audioStreams.add(ms);
+      } else if (streamType == 'subtitle') {
+        subtitleStreams.add(ms);
+      }
+    }
+
+    return PlaybackState(
+      positionTicks: playState?['PositionTicks'] ?? 0,
+      durationTicks: nowPlaying?['RunTimeTicks'],
+      isPaused: playState?['IsPaused'] ?? true,
+      isMuted: playState?['IsMuted'] ?? false,
+      volumeLevel: playState?['VolumeLevel'] ?? 100,
+      nowPlayingItemId: nowPlaying?['Id']?.toString(),
+      nowPlayingItemName: nowPlaying?['Name']?.toString(),
+      nowPlayingItemType: nowPlaying?['Type']?.toString(),
+      nowPlayingArtist: nowPlaying?['AlbumArtist']?.toString() ??
+          ((nowPlaying?['Artists'] as List<dynamic>?)?.isNotEmpty == true
+              ? (nowPlaying!['Artists'] as List<dynamic>).first?.toString()
+              : null),
+      nowPlayingAlbum: nowPlaying?['Album']?.toString(),
+      audioStreams: audioStreams,
+      subtitleStreams: subtitleStreams,
+      audioStreamIndex: playState?['AudioStreamIndex'],
+      subtitleStreamIndex: playState?['SubtitleStreamIndex'],
+      playMethod: playState?['PlayMethod']?.toString(),
     );
   }
 
@@ -189,7 +252,7 @@ class MediaStream {
   factory MediaStream.fromDto(dynamic dto) {
     return MediaStream(
       index: dto.index ?? 0,
-      type: dto.type ?? '',
+      type: PlaybackState._asString(dto.type) ?? '',
       codec: dto.codec,
       language: dto.language,
       displayTitle: dto.displayTitle,
@@ -197,6 +260,21 @@ class MediaStream {
       isForced: dto.isForced ?? false,
       isExternal: dto.isExternal ?? false,
       channels: dto.channels,
+    );
+  }
+
+  /// Creates a MediaStream from raw JSON (Jellyfin uses PascalCase keys).
+  factory MediaStream.fromJson(Map<String, dynamic> json) {
+    return MediaStream(
+      index: json['Index'] ?? 0,
+      type: json['Type']?.toString() ?? '',
+      codec: json['Codec']?.toString(),
+      language: json['Language']?.toString(),
+      displayTitle: json['DisplayTitle']?.toString(),
+      isDefault: json['IsDefault'] == true,
+      isForced: json['IsForced'] == true,
+      isExternal: json['IsExternal'] == true,
+      channels: json['Channels'],
     );
   }
 

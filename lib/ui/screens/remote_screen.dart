@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+
 import '../../core/services/ongoing_activity_service.dart';
 import '../../core/theme/wear_theme.dart';
 import '../../core/utils/watch_shape.dart';
 import '../../navigation/app_router.dart';
+import '../../state/remote_state.dart';
 import '../widgets/common/wear_list_view.dart';
 
 /// Main remote control screen with transport controls and now playing info.
@@ -15,17 +18,14 @@ class RemoteScreen extends StatefulWidget {
 }
 
 class _RemoteScreenState extends State<RemoteScreen> {
-  bool _isPlaying = false;
-  bool _isMuted = false;
-  String _nowPlayingTitle = 'Nothing Playing';
-  String _nowPlayingSubtitle = '';
-  double _progress = 0.0;
-
   @override
   void initState() {
     super.initState();
     OngoingActivityService.start(title: 'Jellyfin Remote');
-    _startPolling();
+    // Start polling playback state
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<RemoteState>().startPolling();
+    });
   }
 
   @override
@@ -34,46 +34,39 @@ class _RemoteScreenState extends State<RemoteScreen> {
     super.dispose();
   }
 
-  void _startPolling() {
-    // TODO: Start polling playback state from Jellyfin API
-  }
-
   Future<void> _playPause() async {
     HapticFeedback.mediumImpact();
-    // TODO: Send playPause command to Jellyfin
-    setState(() => _isPlaying = !_isPlaying);
+    await context.read<RemoteState>().playPause();
   }
 
   Future<void> _stop() async {
     HapticFeedback.mediumImpact();
-    // TODO: Send stop command to Jellyfin
-    setState(() => _isPlaying = false);
+    await context.read<RemoteState>().stop();
   }
 
   Future<void> _previous() async {
     HapticFeedback.mediumImpact();
-    // TODO: Send previousTrack command to Jellyfin
+    await context.read<RemoteState>().previous();
   }
 
   Future<void> _next() async {
     HapticFeedback.mediumImpact();
-    // TODO: Send nextTrack command to Jellyfin
+    await context.read<RemoteState>().next();
   }
 
   Future<void> _volumeUp() async {
     HapticFeedback.lightImpact();
-    // TODO: Send volumeUp command to Jellyfin
+    await context.read<RemoteState>().volumeUp();
   }
 
   Future<void> _volumeDown() async {
     HapticFeedback.lightImpact();
-    // TODO: Send volumeDown command to Jellyfin
+    await context.read<RemoteState>().volumeDown();
   }
 
   Future<void> _toggleMute() async {
     HapticFeedback.mediumImpact();
-    // TODO: Send toggleMute command to Jellyfin
-    setState(() => _isMuted = !_isMuted);
+    await context.read<RemoteState>().toggleMute();
   }
 
   void _openSeek() {
@@ -102,22 +95,45 @@ class _RemoteScreenState extends State<RemoteScreen> {
 
     return Scaffold(
       backgroundColor: WearTheme.background,
-      body: WearListView(
-        children: [
-          // Now playing info
-          _buildNowPlaying(context, padding),
-          // Transport controls
-          _buildTransportControls(context, padding),
-          // Volume controls
-          _buildVolumeControls(context, padding),
-          // Track selection
-          _buildTrackControls(context, padding),
-        ],
+      body: Consumer<RemoteState>(
+        builder: (context, remoteState, child) {
+          final playback = remoteState.playbackState;
+          final isPlaying = playback.isPlaying;
+          final isMuted = playback.isMuted;
+          final nowPlayingTitle = playback.nowPlayingItemName ?? 'Nothing Playing';
+          final nowPlayingSubtitle = playback.nowPlayingArtist ?? playback.nowPlayingAlbum ?? '';
+          final progress = playback.progress;
+
+          return WearListView(
+            children: [
+              // Now playing info
+              _buildNowPlaying(
+                context,
+                padding,
+                title: nowPlayingTitle,
+                subtitle: nowPlayingSubtitle,
+                progress: progress,
+              ),
+              // Transport controls
+              _buildTransportControls(context, padding, isPlaying: isPlaying),
+              // Volume controls
+              _buildVolumeControls(context, padding, isMuted: isMuted),
+              // Track selection
+              _buildTrackControls(context, padding),
+            ],
+          );
+        },
       ),
     );
   }
 
-  Widget _buildNowPlaying(BuildContext context, EdgeInsets padding) {
+  Widget _buildNowPlaying(
+    BuildContext context,
+    EdgeInsets padding, {
+    required String title,
+    required String subtitle,
+    required double progress,
+  }) {
     return SizedBox(
       height: MediaQuery.of(context).size.height,
       child: Center(
@@ -144,15 +160,15 @@ class _RemoteScreenState extends State<RemoteScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  _nowPlayingTitle,
+                  title,
                   style: Theme.of(context).textTheme.titleMedium,
                   textAlign: TextAlign.center,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
-                if (_nowPlayingSubtitle.isNotEmpty)
+                if (subtitle.isNotEmpty)
                   Text(
-                    _nowPlayingSubtitle,
+                    subtitle,
                     style: Theme.of(context).textTheme.bodySmall,
                     textAlign: TextAlign.center,
                   ),
@@ -161,7 +177,7 @@ class _RemoteScreenState extends State<RemoteScreen> {
                 ClipRRect(
                   borderRadius: BorderRadius.circular(2),
                   child: LinearProgressIndicator(
-                    value: _progress,
+                    value: progress,
                     minHeight: 3,
                   ),
                 ),
@@ -173,7 +189,11 @@ class _RemoteScreenState extends State<RemoteScreen> {
     );
   }
 
-  Widget _buildTransportControls(BuildContext context, EdgeInsets padding) {
+  Widget _buildTransportControls(
+    BuildContext context,
+    EdgeInsets padding, {
+    required bool isPlaying,
+  }) {
     return SizedBox(
       height: MediaQuery.of(context).size.height,
       child: Center(
@@ -194,7 +214,7 @@ class _RemoteScreenState extends State<RemoteScreen> {
                 child: IconButton(
                   onPressed: _playPause,
                   icon: Icon(
-                    _isPlaying ? Icons.pause : Icons.play_arrow,
+                    isPlaying ? Icons.pause : Icons.play_arrow,
                     size: 36,
                   ),
                 ),
@@ -210,7 +230,11 @@ class _RemoteScreenState extends State<RemoteScreen> {
     );
   }
 
-  Widget _buildVolumeControls(BuildContext context, EdgeInsets padding) {
+  Widget _buildVolumeControls(
+    BuildContext context,
+    EdgeInsets padding, {
+    required bool isMuted,
+  }) {
     return SizedBox(
       height: MediaQuery.of(context).size.height,
       child: Center(
@@ -226,9 +250,9 @@ class _RemoteScreenState extends State<RemoteScreen> {
               IconButton(
                 onPressed: _toggleMute,
                 icon: Icon(
-                  _isMuted ? Icons.volume_off : Icons.volume_up,
+                  isMuted ? Icons.volume_off : Icons.volume_up,
                   size: 28,
-                  color: _isMuted ? WearTheme.textSecondary : null,
+                  color: isMuted ? WearTheme.textSecondary : null,
                 ),
               ),
               IconButton(

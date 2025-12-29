@@ -35,8 +35,8 @@ dependencies:
   wearable_rotary: ^2.0.3
   flutter_screenutil: ^5.9.0
 
-  # Jellyfin API
-  jellyfin_dart: ^0.1.2
+  # Jellyfin API (raw HTTP)
+  dio: ^5.9.0
 
   # State management
   provider: ^6.1.1

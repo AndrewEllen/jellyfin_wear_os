@@ -1,5 +1,25 @@
+import 'package:flutter/foundation.dart';
+
 /// Jellyfin-specific constants for API and discovery.
 abstract class JellyfinConstants {
+  /// Toggle debug logging on/off.
+  static const bool enableDebugLogs = true;
+
+  /// Logs a debug message with optional error and stack trace.
+  static void log(String message, {Object? error, StackTrace? stack}) {
+    if (!enableDebugLogs) return;
+
+    final ts = DateTime.now().toIso8601String();
+    debugPrint('[JF][$ts] $message');
+
+    if (error != null) {
+      debugPrint('[JF][$ts] ERROR: $error');
+    }
+    if (stack != null) {
+      debugPrint('[JF][$ts] STACK:\n$stack');
+    }
+  }
+
   // UDP server discovery
   static const int discoveryPort = 7359;
   static const Duration discoveryTimeout = Duration(seconds: 5);

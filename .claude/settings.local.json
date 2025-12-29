@@ -4,7 +4,11 @@
       "Bash(dir:*)",
       "Bash(flutter pub get:*)",
       "Bash(findstr:*)",
-      "Bash(tasklist:*)"
+      "Bash(tasklist:*)",
+      "Bash(flutter analyze:*)",
+      "Bash(cat:*)",
+      "Bash(flutter pub deps:*)",
+      "Bash(flutter build:*)"
     ]
   }
 }

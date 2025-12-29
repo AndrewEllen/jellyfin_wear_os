@@ -1,5 +1,3 @@
-import 'package:jellyfin_dart/jellyfin_dart.dart';
-
 import '../../core/constants/jellyfin_constants.dart';
 
 /// Model representing a library item (movie, episode, song, etc.).
@@ -100,26 +98,31 @@ class LibraryItem {
     }
   }
 
-  /// Creates a LibraryItem from a Jellyfin BaseItemDto.
-  factory LibraryItem.fromDto(BaseItemDto dto) {
+  /// Creates a LibraryItem from raw JSON (Jellyfin uses PascalCase keys).
+  factory LibraryItem.fromJson(Map<String, dynamic> json) {
+    final artists = json['Artists'] as List<dynamic>?;
+    final imageTags = json['ImageTags'] as Map<String, dynamic>?;
+    final backdropTags = json['BackdropImageTags'] as List<dynamic>?;
+
     return LibraryItem(
-      id: dto.id ?? '',
-      name: dto.name ?? 'Unknown',
-      type: dto.type?.value ?? '',
-      seriesId: dto.seriesId,
-      seriesName: dto.seriesName,
-      albumId: dto.albumId,
-      artistName: dto.albumArtist ?? (dto.artists?.isNotEmpty == true ? dto.artists!.first : null),
-      indexNumber: dto.indexNumber,
-      parentIndexNumber: dto.parentIndexNumber,
-      runTimeTicks: dto.runTimeTicks,
-      overview: dto.overview,
-      productionYear: dto.productionYear,
-      imagePrimaryTag: dto.imageTags?['Primary'],
-      imageBackdropTag: dto.backdropImageTags?.isNotEmpty == true
-          ? dto.backdropImageTags!.first
+      id: (json['Id'] ?? '').toString(),
+      name: (json['Name'] ?? 'Unknown').toString(),
+      type: (json['Type'] ?? '').toString(),
+      seriesId: json['SeriesId']?.toString(),
+      seriesName: json['SeriesName']?.toString(),
+      albumId: json['AlbumId']?.toString(),
+      artistName: json['AlbumArtist']?.toString() ??
+          (artists?.isNotEmpty == true ? artists!.first?.toString() : null),
+      indexNumber: json['IndexNumber'] as int?,
+      parentIndexNumber: json['ParentIndexNumber'] as int?,
+      runTimeTicks: json['RunTimeTicks'] as int?,
+      overview: json['Overview']?.toString(),
+      productionYear: json['ProductionYear'] as int?,
+      imagePrimaryTag: imageTags?['Primary']?.toString(),
+      imageBackdropTag: backdropTags?.isNotEmpty == true
+          ? backdropTags!.first?.toString()
           : null,
-      communityRating: dto.communityRating,
+      communityRating: (json['CommunityRating'] as num?)?.toDouble(),
     );
   }
 
@@ -139,12 +142,12 @@ class LibraryView {
     this.collectionType,
   });
 
-  /// Creates a LibraryView from a Jellyfin BaseItemDto.
-  factory LibraryView.fromDto(BaseItemDto dto) {
+  /// Creates a LibraryView from raw JSON (Jellyfin uses PascalCase keys).
+  factory LibraryView.fromJson(Map<String, dynamic> json) {
     return LibraryView(
-      id: dto.id ?? '',
-      name: dto.name ?? 'Unknown',
-      collectionType: dto.collectionType?.value,
+      id: (json['Id'] ?? '').toString(),
+      name: (json['Name'] ?? 'Unknown').toString(),
+      collectionType: json['CollectionType']?.toString(),
     );
   }
 

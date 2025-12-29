@@ -1,8 +1,10 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import 'app.dart';
+import 'core/constants/jellyfin_constants.dart';
 import 'data/jellyfin/jellyfin_client_wrapper.dart';
 import 'data/jellyfin/server_discovery.dart';
 import 'data/repositories/auth_repository.dart';
@@ -16,6 +18,21 @@ import 'state/session_state.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Global error handlers
+  FlutterError.onError = (details) {
+    FlutterError.dumpErrorToConsole(details);
+    JellyfinConstants.log(
+      'FlutterError: ${details.exceptionAsString()}',
+      error: details.exception,
+      stack: details.stack,
+    );
+  };
+
+  PlatformDispatcher.instance.onError = (error, stack) {
+    JellyfinConstants.log('Uncaught async error', error: error, stack: stack);
+    return true;
+  };
 
   // Lock orientation to portrait for Wear OS
   SystemChrome.setPreferredOrientations([

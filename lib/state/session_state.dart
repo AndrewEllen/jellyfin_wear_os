@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import '../core/constants/jellyfin_constants.dart';
 import '../data/models/session_device.dart';
 import '../data/repositories/session_repository.dart';
 
@@ -14,89 +15,87 @@ class SessionState extends ChangeNotifier {
 
   SessionState(this._repository);
 
-  /// Available sessions.
   List<SessionDevice> get sessions => _sessions;
-
-  /// Currently selected target session.
   SessionDevice? get targetSession => _targetSession;
-
-  /// Whether sessions are loading.
   bool get isLoading => _isLoading;
-
-  /// Error message if loading failed.
   String? get errorMessage => _errorMessage;
-
-  /// Whether a target session is selected.
   bool get hasTarget => _targetSession != null;
 
-  /// Refreshes the list of active sessions.
   Future<void> refreshSessions() async {
     _setLoading(true);
 
     try {
+      JellyfinConstants.log('SessionState.refreshSessions() start');
+
       _sessions = await _repository.getActiveSessions();
       _errorMessage = null;
 
-      // Try to restore last used session
+      JellyfinConstants.log('SessionState.refreshSessions(): ${_sessions.length} sessions');
+
       if (_targetSession == null) {
         await _tryRestoreLastSession();
       } else {
-        // Verify current target is still available
         final stillAvailable = _sessions.any((s) => s.sessionId == _targetSession!.sessionId);
         if (!stillAvailable) {
+          JellyfinConstants.log(
+            'SessionState.refreshSessions(): targetSession no longer available '
+            'targetSession=${_targetSession!.sessionId}',
+          );
           _targetSession = null;
           await _repository.clearLastSession();
         }
       }
-    } catch (e) {
-      _errorMessage = 'Failed to load sessions';
+    } catch (e, st) {
+      JellyfinConstants.log('SessionState.refreshSessions() failed', error: e, stack: st);
+      _errorMessage = 'Failed to load sessions: $e';
     }
 
     _setLoading(false);
   }
 
-  /// Sets the target session for remote control.
   Future<void> setTargetSession(SessionDevice session) async {
+    JellyfinConstants.log('SessionState.setTargetSession(): ${session.sessionId}');
     _targetSession = session;
     await _repository.saveLastSession(session.sessionId);
     notifyListeners();
   }
 
-  /// Clears the target session.
   Future<void> clearTargetSession() async {
+    JellyfinConstants.log('SessionState.clearTargetSession()');
     _targetSession = null;
     await _repository.clearLastSession();
     notifyListeners();
   }
 
-  /// Starts playback of items on the target session.
   Future<bool> playOnTarget(List<String> itemIds) async {
     if (_targetSession == null) return false;
-
-    return _repository.play(
-      sessionId: _targetSession!.sessionId,
-      itemIds: itemIds,
-    );
+    return _repository.play(sessionId: _targetSession!.sessionId, itemIds: itemIds);
   }
 
-  /// Queues items next on the target session.
   Future<bool> queueNextOnTarget(List<String> itemIds) async {
     if (_targetSession == null) return false;
-
-    return _repository.queueNext(
-      sessionId: _targetSession!.sessionId,
-      itemIds: itemIds,
-    );
+    return _repository.queueNext(sessionId: _targetSession!.sessionId, itemIds: itemIds);
   }
 
-  /// Tries to restore the last used session.
   Future<void> _tryRestoreLastSession() async {
     final lastSessionId = await _repository.getLastSessionId();
+    JellyfinConstants.log('SessionState._tryRestoreLastSession(): lastSessionId=$lastSessionId');
+
     if (lastSessionId == null) return;
 
-    final session = _sessions.where((s) => s.sessionId == lastSessionId).firstOrNull;
-    if (session != null) {
-      _targetSession = session;
+    SessionDevice? match;
+    for (final s in _sessions) {
+      if (s.sessionId == lastSessionId) {
+        match = s;
+        break;
+      }
+    }
+
+    if (match != null) {
+      _targetSession = match;
+      JellyfinConstants.log('SessionState._tryRestoreLastSession(): restored targetSession=${match.sessionId}');
+    } else {
+      JellyfinConstants.log('SessionState._tryRestoreLastSession(): lastSession not found in active sessions');
     }
   }
 

@@ -1,5 +1,4 @@
 import 'package:flutter/foundation.dart';
-import 'package:jellyfin_dart/jellyfin_dart.dart';
 
 import '../../core/constants/jellyfin_constants.dart';
 import '../jellyfin/jellyfin_client_wrapper.dart';
@@ -22,14 +21,15 @@ class LibraryRepository {
     }
 
     try {
-      // Use UserViewsApi to get user's library views
-      final response = await _client.client?.getUserViewsApi().getUserViews(userId: userId);
-      debugPrint('[LibraryRepo] Response: ${response?.statusCode}, items: ${response?.data?.items?.length}');
+      final response = await _client.get('/Users/$userId/Views');
+      debugPrint('[LibraryRepo] Response: ${response.statusCode}');
 
-      final items = response?.data?.items ?? [];
-      return items.map((dto) {
-        debugPrint('[LibraryRepo] Processing: ${dto.name}, collectionType: ${dto.collectionType}');
-        return LibraryView.fromDto(dto);
+      final data = response.data as Map<String, dynamic>;
+      final items = data['Items'] as List<dynamic>? ?? [];
+
+      return items.map((json) {
+        debugPrint('[LibraryRepo] Processing: ${json['Name']}, collectionType: ${json['CollectionType']}');
+        return LibraryView.fromJson(json as Map<String, dynamic>);
       }).toList();
     } catch (e, stack) {
       debugPrint('[LibraryRepo] Error: $e\n$stack');
@@ -40,34 +40,40 @@ class LibraryRepository {
   /// Gets items from a library or folder.
   Future<List<LibraryItem>> getItems({
     required String parentId,
-    List<BaseItemKind>? includeItemTypes,
+    List<String>? includeItemTypes,
     int startIndex = 0,
     int limit = JellyfinConstants.defaultPageSize,
-    ItemSortBy? sortBy,
-    SortOrder? sortOrder,
+    String? sortBy,
+    String? sortOrder,
   }) async {
     final userId = _client.userId;
     if (userId == null) return [];
 
     try {
-      final response = await _client.itemsApi?.getItems(
-        userId: userId,
-        parentId: parentId,
-        includeItemTypes: includeItemTypes,
-        startIndex: startIndex,
-        limit: limit,
-        sortBy: [sortBy ?? ItemSortBy.sortName],
-        sortOrder: [sortOrder ?? SortOrder.ascending],
-        fields: [
-          ItemFields.overview,
-          ItemFields.primaryImageAspectRatio,
-        ],
-        imageTypeLimit: 1,
-        enableImageTypes: [ImageType.primary, ImageType.backdrop],
+      final queryParams = <String, dynamic>{
+        'parentId': parentId,
+        'startIndex': startIndex,
+        'limit': limit,
+        'sortBy': sortBy ?? 'SortName',
+        'sortOrder': sortOrder ?? 'Ascending',
+        'fields': 'Overview,PrimaryImageAspectRatio',
+        'imageTypeLimit': 1,
+        'enableImageTypes': 'Primary,Backdrop',
+      };
+
+      if (includeItemTypes != null && includeItemTypes.isNotEmpty) {
+        queryParams['includeItemTypes'] = includeItemTypes.join(',');
+      }
+
+      final response = await _client.get(
+        '/Users/$userId/Items',
+        queryParameters: queryParams,
       );
 
-      final items = response?.data?.items ?? [];
-      return items.map((dto) => LibraryItem.fromDto(dto)).toList();
+      final data = response.data as Map<String, dynamic>;
+      final items = data['Items'] as List<dynamic>? ?? [];
+
+      return items.map((json) => LibraryItem.fromJson(json as Map<String, dynamic>)).toList();
     } catch (e) {
       return [];
     }
@@ -79,13 +85,15 @@ class LibraryRepository {
     if (userId == null) return [];
 
     try {
-      final response = await _client.client?.getTvShowsApi().getSeasons(
-        seriesId: seriesId,
-        userId: userId,
+      final response = await _client.get(
+        '/Shows/$seriesId/Seasons',
+        queryParameters: {'userId': userId},
       );
 
-      final items = response?.data?.items ?? [];
-      return items.map((dto) => LibraryItem.fromDto(dto)).toList();
+      final data = response.data as Map<String, dynamic>;
+      final items = data['Items'] as List<dynamic>? ?? [];
+
+      return items.map((json) => LibraryItem.fromJson(json as Map<String, dynamic>)).toList();
     } catch (e) {
       return [];
     }
@@ -101,16 +109,22 @@ class LibraryRepository {
     if (userId == null) return [];
 
     try {
-      final response = await _client.client?.getTvShowsApi().getEpisodes(
-        seriesId: seriesId,
-        userId: userId,
-        seasonId: seasonId,
-        season: seasonNumber,
-        fields: [ItemFields.overview],
+      final queryParams = <String, dynamic>{
+        'userId': userId,
+        'fields': 'Overview',
+      };
+      if (seasonId != null) queryParams['seasonId'] = seasonId;
+      if (seasonNumber != null) queryParams['season'] = seasonNumber;
+
+      final response = await _client.get(
+        '/Shows/$seriesId/Episodes',
+        queryParameters: queryParams,
       );
 
-      final items = response?.data?.items ?? [];
-      return items.map((dto) => LibraryItem.fromDto(dto)).toList();
+      final data = response.data as Map<String, dynamic>;
+      final items = data['Items'] as List<dynamic>? ?? [];
+
+      return items.map((json) => LibraryItem.fromJson(json as Map<String, dynamic>)).toList();
     } catch (e) {
       return [];
     }
@@ -120,8 +134,8 @@ class LibraryRepository {
   Future<List<LibraryItem>> getAlbumTracks(String albumId) async {
     return getItems(
       parentId: albumId,
-      includeItemTypes: [BaseItemKind.audio],
-      sortBy: ItemSortBy.indexNumber,
+      includeItemTypes: ['Audio'],
+      sortBy: 'IndexNumber',
     );
   }
 
@@ -131,16 +145,20 @@ class LibraryRepository {
     if (userId == null) return [];
 
     try {
-      final response = await _client.itemsApi?.getItems(
-        userId: userId,
-        albumArtistIds: [artistId],
-        includeItemTypes: [BaseItemKind.musicAlbum],
-        sortBy: [ItemSortBy.productionYear, ItemSortBy.sortName],
-        sortOrder: [SortOrder.descending, SortOrder.ascending],
+      final response = await _client.get(
+        '/Users/$userId/Items',
+        queryParameters: {
+          'albumArtistIds': artistId,
+          'includeItemTypes': 'MusicAlbum',
+          'sortBy': 'ProductionYear,SortName',
+          'sortOrder': 'Descending,Ascending',
+        },
       );
 
-      final items = response?.data?.items ?? [];
-      return items.map((dto) => LibraryItem.fromDto(dto)).toList();
+      final data = response.data as Map<String, dynamic>;
+      final items = data['Items'] as List<dynamic>? ?? [];
+
+      return items.map((json) => LibraryItem.fromJson(json as Map<String, dynamic>)).toList();
     } catch (e) {
       return [];
     }
@@ -152,41 +170,44 @@ class LibraryRepository {
     if (userId == null) return null;
 
     try {
-      final response = await _client.userLibraryApi?.getItem(
-        userId: userId,
-        itemId: itemId,
-      );
-
-      if (response?.data != null) {
-        return LibraryItem.fromDto(response!.data!);
-      }
+      final response = await _client.get('/Users/$userId/Items/$itemId');
+      final data = response.data as Map<String, dynamic>;
+      return LibraryItem.fromJson(data);
     } catch (e) {
       // Item not found
+      return null;
     }
-
-    return null;
   }
 
   /// Searches for items by name.
   Future<List<LibraryItem>> search({
     required String query,
-    List<BaseItemKind>? includeItemTypes,
+    List<String>? includeItemTypes,
     int limit = 20,
   }) async {
     final userId = _client.userId;
     if (userId == null) return [];
 
     try {
-      final response = await _client.itemsApi?.getItems(
-        userId: userId,
-        searchTerm: query,
-        includeItemTypes: includeItemTypes,
-        limit: limit,
-        recursive: true,
+      final queryParams = <String, dynamic>{
+        'searchTerm': query,
+        'limit': limit,
+        'recursive': true,
+      };
+
+      if (includeItemTypes != null && includeItemTypes.isNotEmpty) {
+        queryParams['includeItemTypes'] = includeItemTypes.join(',');
+      }
+
+      final response = await _client.get(
+        '/Users/$userId/Items',
+        queryParameters: queryParams,
       );
 
-      final items = response?.data?.items ?? [];
-      return items.map((dto) => LibraryItem.fromDto(dto)).toList();
+      final data = response.data as Map<String, dynamic>;
+      final items = data['Items'] as List<dynamic>? ?? [];
+
+      return items.map((json) => LibraryItem.fromJson(json as Map<String, dynamic>)).toList();
     } catch (e) {
       return [];
     }
@@ -195,7 +216,7 @@ class LibraryRepository {
   /// Gets the image URL for an item.
   String? getImageUrl(
     String itemId, {
-    ImageType imageType = ImageType.primary,
+    String imageType = 'Primary',
     int maxWidth = JellyfinConstants.imageMaxWidth,
   }) {
     return _client.getImageUrl(
