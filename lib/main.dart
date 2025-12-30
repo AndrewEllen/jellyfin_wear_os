@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import 'app.dart';
 import 'core/constants/jellyfin_constants.dart';
+import 'core/services/hardware_button_service.dart';
 import 'data/jellyfin/jellyfin_client_wrapper.dart';
 import 'data/jellyfin/server_discovery.dart';
 import 'data/repositories/auth_repository.dart';
@@ -18,6 +19,9 @@ import 'state/session_state.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize hardware button service
+  HardwareButtonService.initialize();
 
   // Global error handlers
   FlutterError.onError = (details) {

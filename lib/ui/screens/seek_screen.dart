@@ -15,10 +15,16 @@ import '../../state/remote_state.dart';
 /// - Full draggable ring UI to select timestamp
 /// - Center shows the selected time
 /// - Rotary increments/decrements timestamp
-/// - Confirm button applies the seek
+/// - Auto-applies seek when interaction ends
 /// - Inflate/deflate animation while adjusting
 class SeekScreen extends StatefulWidget {
-  const SeekScreen({super.key});
+  /// Seek increment in seconds per rotary tick.
+  final int rotarySeekSeconds;
+
+  const SeekScreen({
+    super.key,
+    this.rotarySeekSeconds = 5,
+  });
 
   @override
   State<SeekScreen> createState() => _SeekScreenState();
@@ -27,18 +33,17 @@ class SeekScreen extends StatefulWidget {
 class _SeekScreenState extends State<SeekScreen>
     with SingleTickerProviderStateMixin {
   StreamSubscription<RotaryEvent>? _rotarySubscription;
-  Timer? _deflateTimer;
+  Timer? _applySeekTimer;
 
   late AnimationController _inflateController;
   late Animation<double> _strokeAnimation;
 
   // Playback state
   int _positionTicks = 0;
+  int _originalPositionTicks = 0;
   int _durationTicks = 0;
   bool _isInteracting = false;
-
-  // Seek increment in ticks (10 seconds)
-  static const int _seekIncrement = 100000000;
+  bool _hasChanged = false;
 
   // Stroke widths
   static const double _normalStroke = 8.0;
@@ -70,6 +75,7 @@ class _SeekScreenState extends State<SeekScreen>
       final playback = remoteState.playbackState;
       setState(() {
         _positionTicks = playback.positionTicks;
+        _originalPositionTicks = playback.positionTicks;
         _durationTicks = playback.durationTicks ?? 0;
       });
     });
@@ -79,7 +85,7 @@ class _SeekScreenState extends State<SeekScreen>
 
   @override
   void dispose() {
-    _deflateTimer?.cancel();
+    _applySeekTimer?.cancel();
     _rotarySubscription?.cancel();
     _inflateController.dispose();
     super.dispose();
@@ -88,34 +94,58 @@ class _SeekScreenState extends State<SeekScreen>
   void _onRotaryEvent(RotaryEvent event) {
     _onInteractionStart();
 
+    // Convert seconds to ticks (10,000,000 ticks per second)
+    final seekIncrement = widget.rotarySeekSeconds * 10000000;
+
     setState(() {
       if (event.direction == RotaryDirection.clockwise) {
-        _positionTicks = math.min(_positionTicks + _seekIncrement, _durationTicks);
+        _positionTicks = math.min(_positionTicks + seekIncrement, _durationTicks);
       } else {
-        _positionTicks = math.max(_positionTicks - _seekIncrement, 0);
+        _positionTicks = math.max(_positionTicks - seekIncrement, 0);
       }
+      _hasChanged = _positionTicks != _originalPositionTicks;
     });
 
     HapticFeedback.lightImpact();
-    _scheduleDeflate();
+    _scheduleApplySeek();
   }
 
   void _onInteractionStart() {
+    _applySeekTimer?.cancel();
     if (!_isInteracting) {
-      _isInteracting = true;
-      _deflateTimer?.cancel();
+      setState(() => _isInteracting = true);
       _inflateController.forward();
     }
   }
 
-  void _scheduleDeflate() {
-    _deflateTimer?.cancel();
-    _deflateTimer = Timer(const Duration(milliseconds: 500), () {
-      if (mounted) {
-        _isInteracting = false;
+  void _scheduleApplySeek() {
+    _applySeekTimer?.cancel();
+    _applySeekTimer = Timer(const Duration(milliseconds: 800), () {
+      if (mounted && _hasChanged) {
+        _applySeek();
+      } else if (mounted) {
+        setState(() => _isInteracting = false);
         _inflateController.reverse();
       }
     });
+  }
+
+  Future<void> _applySeek() async {
+    if (!_hasChanged) return;
+
+    HapticFeedback.mediumImpact();
+
+    final remoteState = context.read<RemoteState>();
+    await remoteState.seek(_positionTicks);
+
+    if (mounted) {
+      setState(() {
+        _originalPositionTicks = _positionTicks;
+        _hasChanged = false;
+        _isInteracting = false;
+      });
+      _inflateController.reverse();
+    }
   }
 
   void _onPanStart(DragStartDetails details) {
@@ -128,14 +158,14 @@ class _SeekScreenState extends State<SeekScreen>
   }
 
   void _onPanEnd(DragEndDetails details) {
-    _scheduleDeflate();
+    _scheduleApplySeek();
   }
 
   void _updatePositionFromTouch(Offset position) {
-    final size = context.size;
-    if (size == null || _durationTicks <= 0) return;
+    final screenSize = MediaQuery.of(context).size;
+    if (_durationTicks <= 0) return;
 
-    final center = Offset(size.width / 2, size.height / 2);
+    final center = Offset(screenSize.width / 2, screenSize.height / 2);
     final touchVector = position - center;
 
     // Calculate angle from center (0 = right, -pi/2 = top)
@@ -160,23 +190,9 @@ class _SeekScreenState extends State<SeekScreen>
       HapticFeedback.selectionClick();
       setState(() {
         _positionTicks = newPosition;
+        _hasChanged = _positionTicks != _originalPositionTicks;
       });
     }
-  }
-
-  Future<void> _confirmSeek() async {
-    HapticFeedback.mediumImpact();
-
-    final remoteState = context.read<RemoteState>();
-    await remoteState.seek(_positionTicks);
-
-    if (mounted) {
-      Navigator.pop(context);
-    }
-  }
-
-  void _cancel() {
-    Navigator.pop(context);
   }
 
   String _formatTime(int ticks) {
@@ -202,6 +218,7 @@ class _SeekScreenState extends State<SeekScreen>
     return Scaffold(
       backgroundColor: WearTheme.background,
       body: GestureDetector(
+        behavior: HitTestBehavior.opaque,
         onPanStart: _onPanStart,
         onPanUpdate: _onPanUpdate,
         onPanEnd: _onPanEnd,
@@ -243,41 +260,13 @@ class _SeekScreenState extends State<SeekScreen>
                         ),
                   ),
                   const SizedBox(height: 12),
-                  // Instruction
+                  // Instruction / status
                   Text(
-                    'Drag or rotate to seek',
+                    _hasChanged ? 'Release to seek' : 'Drag or rotate',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: WearTheme.textSecondary,
-                          fontSize: 10,
+                          color: _hasChanged ? WearTheme.jellyfinPurple : WearTheme.textSecondary,
+                          fontSize: 11,
                         ),
-                  ),
-                ],
-              ),
-            ),
-            // Bottom buttons
-            Positioned(
-              bottom: 16,
-              left: 0,
-              right: 0,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  // Cancel button
-                  IconButton(
-                    onPressed: _cancel,
-                    icon: const Icon(Icons.close, size: 24),
-                    style: IconButton.styleFrom(
-                      backgroundColor: WearTheme.surface,
-                    ),
-                  ),
-                  const SizedBox(width: 24),
-                  // Confirm button
-                  IconButton(
-                    onPressed: _confirmSeek,
-                    icon: const Icon(Icons.check, size: 28),
-                    style: IconButton.styleFrom(
-                      backgroundColor: WearTheme.jellyfinPurple,
-                    ),
                   ),
                 ],
               ),
@@ -337,17 +326,15 @@ class _SeekArcPainter extends CustomPainter {
     }
 
     // Draw position indicator dot
-    if (progress > 0) {
-      final indicatorAngle = startAngle + sweepAngle;
-      final indicatorX = center.dx + radius * math.cos(indicatorAngle);
-      final indicatorY = center.dy + radius * math.sin(indicatorAngle);
+    final indicatorAngle = startAngle + sweepAngle;
+    final indicatorX = center.dx + radius * math.cos(indicatorAngle);
+    final indicatorY = center.dy + radius * math.sin(indicatorAngle);
 
-      final dotPaint = Paint()
-        ..color = Colors.white
-        ..style = PaintingStyle.fill;
+    final dotPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
 
-      canvas.drawCircle(Offset(indicatorX, indicatorY), 6, dotPaint);
-    }
+    canvas.drawCircle(Offset(indicatorX, indicatorY), isInteracting ? 8 : 6, dotPaint);
   }
 
   @override

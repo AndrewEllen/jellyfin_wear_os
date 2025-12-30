@@ -10,6 +10,23 @@ import '../../state/remote_state.dart';
 import '../../state/session_state.dart';
 import '../widgets/common/rotary_wheel_list.dart';
 
+/// Item type for the session picker list.
+enum _SessionItemType { session, settings }
+
+/// Wrapper for list items that can be either a session or settings.
+class _SessionListItem {
+  final _SessionItemType type;
+  final SessionDevice? session;
+
+  const _SessionListItem.session(SessionDevice s)
+      : type = _SessionItemType.session,
+        session = s;
+
+  const _SessionListItem.settings()
+      : type = _SessionItemType.settings,
+        session = null;
+}
+
 /// Screen for selecting a target Jellyfin session to control.
 ///
 /// Uses RotaryWheelList for a Wear-style wheel list with scale/fade effect.
@@ -87,16 +104,28 @@ class _SessionPickerScreenState extends State<SessionPickerScreen> {
 
           final sessions = state.sessions;
 
-          if (sessions.isEmpty) {
-            return _buildEmptyState();
-          }
+          // Build list with sessions and settings at the end
+          // Settings is always available, even with no sessions
+          final items = <_SessionListItem>[
+            ...sessions.map((s) => _SessionListItem.session(s)),
+            const _SessionListItem.settings(),
+          ];
 
-          return RotaryWheelList<SessionDevice>(
-            items: sessions,
+          return RotaryWheelList<_SessionListItem>(
+            items: items,
             itemExtent: 90,
-            onItemTap: (session, index) => _selectSession(session),
-            itemBuilder: (context, session, index, isCentered) {
-              return _buildSessionCard(session, isCentered);
+            onItemTap: (item, index) {
+              if (item.type == _SessionItemType.settings) {
+                Navigator.pushNamed(context, AppRoutes.settings);
+              } else if (item.session != null) {
+                _selectSession(item.session!);
+              }
+            },
+            itemBuilder: (context, item, index, isCentered) {
+              if (item.type == _SessionItemType.settings) {
+                return _buildSettingsCard(isCentered);
+              }
+              return _buildSessionCard(item.session!, isCentered);
             },
           );
         },
@@ -130,41 +159,6 @@ class _SessionPickerScreenState extends State<SessionPickerScreen> {
               overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 14),
-            TextButton.icon(
-              onPressed: () => context.read<SessionState>().refreshSessions(),
-              icon: const Icon(Icons.refresh, size: 18),
-              label: const Text('Refresh'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildEmptyState() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              Icons.devices_outlined,
-              size: 32,
-              color: WearTheme.textSecondary,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'No Devices',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'No active Jellyfin\nclients found',
-              style: Theme.of(context).textTheme.bodySmall,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 16),
             TextButton.icon(
               onPressed: () => context.read<SessionState>().refreshSessions(),
               icon: const Icon(Icons.refresh, size: 18),
@@ -238,6 +232,38 @@ class _SessionPickerScreenState extends State<SessionPickerScreen> {
                   ),
                 ],
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSettingsCard(bool isCentered) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: isCentered ? WearTheme.surface : WearTheme.surfaceVariant,
+        borderRadius: BorderRadius.circular(16),
+        border: isCentered
+            ? Border.all(color: WearTheme.jellyfinPurple, width: 1.5)
+            : null,
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.settings,
+            size: 28,
+            color: isCentered ? WearTheme.jellyfinPurple : WearTheme.textSecondary,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'Settings',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    fontWeight: isCentered ? FontWeight.bold : null,
+                  ),
             ),
           ),
         ],

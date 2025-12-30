@@ -7,14 +7,15 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:wearable_rotary/wearable_rotary.dart';
 
+import '../../core/services/hardware_button_service.dart';
 import '../../core/services/ongoing_activity_service.dart';
 import '../../core/theme/wear_theme.dart';
 import '../../data/repositories/library_repository.dart';
 import '../../navigation/app_router.dart';
 import '../../state/remote_state.dart';
-import '../widgets/common/rotary_scroll_wrapper.dart';
 import '../widgets/remote/playback_ring.dart';
-import '../widgets/remote/volume_arc.dart';
+import '../widgets/remote/volume_button.dart';
+import '../widgets/remote/volume_popup.dart';
 import 'media_selection_screen.dart';
 import 'seek_screen.dart';
 
@@ -22,7 +23,7 @@ import 'seek_screen.dart';
 ///
 /// Features:
 /// - 3-page PageView: Remote Controls, Seek, Media Selection
-/// - Page 1: Blurred background, playback ring, volume arc, controls
+/// - Page 1: Blurred background, playback ring, volume controls
 /// - Rotary controls volume on page 1
 class RemoteScreen extends StatefulWidget {
   const RemoteScreen({super.key});
@@ -31,15 +32,45 @@ class RemoteScreen extends StatefulWidget {
   State<RemoteScreen> createState() => _RemoteScreenState();
 }
 
-class _RemoteScreenState extends State<RemoteScreen>
-    with RotaryScrollMixin<RemoteScreen> {
+class _RemoteScreenState extends State<RemoteScreen> {
+  // ============================================================
+  // SENSITIVITY SETTINGS - Adjust these to tune responsiveness
+  // ============================================================
+
+  /// Pixels of rotary rotation needed to change volume by 1%.
+  /// Higher = less sensitive, lower = more sensitive.
+  static const double _volumeRotarySensitivity = 8;
+  double _volumeRotaryAccum = 0.0;
+
+  /// Pixels of drag needed to change volume by 1% in popup
+  static const double _volumeDragSensitivity = 2.0;
+
+  /// Seek increment in seconds per rotary tick on seek screen
+  static const int _seekRotarySeconds = 5;
+
+  // Local target volume while adjusting (avoids stale RemoteState base).
+  int? _volumeTargetLevel;
+  int? _volumePreviewLevel;
+  DateTime? _lastRotaryEventAt;
+
+// Rate-limit outbound setVolume calls.
+  static const Duration _volumeSendInterval = Duration(milliseconds: 60);
+
+  Timer? _volumeSendTimer;
+  int? _pendingVolumeToSend;
+  int? _lastSentVolume;
+  Timer? _volumePreviewFailsafeTimer;
+
+
+  // ============================================================
+
   late PageController _pageController;
   Timer? _volumeDeflateTimer;
   bool _volumeActive = false;
+  bool _showVolumePopup = false;
+  double _volumeRotaryPixelAccum = 0.0;
   StreamSubscription<RotaryEvent>? _volumeRotarySubscription;
-
-  @override
-  int get numberOfPages => 3;
+  StreamSubscription<int>? _buttonSubscription;
 
   @override
   void initState() {
@@ -47,7 +78,6 @@ class _RemoteScreenState extends State<RemoteScreen>
     OngoingActivityService.start(title: 'Jellyfin Remote');
 
     _pageController = PageController(initialPage: 0);
-    initRotaryScroll(_pageController);
 
     // Start polling playback state
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -56,47 +86,117 @@ class _RemoteScreenState extends State<RemoteScreen>
 
     // Subscribe to rotary for volume control on page 0
     _volumeRotarySubscription = rotaryEvents.listen(_onVolumeRotaryEvent);
+
+    // Subscribe to hardware button for play/pause
+    _buttonSubscription = HardwareButtonService.stemButtonEvents.listen((button) {
+      if (button == 1) {
+        _playPause();
+      }
+    });
   }
 
   @override
   void dispose() {
     _volumeDeflateTimer?.cancel();
     _volumeRotarySubscription?.cancel();
-    disposeRotaryScroll();
+    _volumeSendTimer?.cancel();
+    _volumePreviewFailsafeTimer?.cancel();
+    _buttonSubscription?.cancel();
+    _pageController.dispose();
     OngoingActivityService.stop();
     super.dispose();
   }
 
   void _onVolumeRotaryEvent(RotaryEvent event) {
-    // Only handle volume on the first page (remote controls)
-    if (currentPage != 0) return;
+    final page = _pageController.hasClients ? _pageController.page?.round() ?? 0 : 0;
+    if (page != 0) return;
 
     final remoteState = context.read<RemoteState>();
-    final currentVolume = remoteState.playbackState.volumeLevel;
 
-    final delta = event.direction == RotaryDirection.clockwise ? 5 : -5;
-    final newVolume = (currentVolume + delta).clamp(0, 100);
+    // magnitude can be null; docs say it's "magnitude of the rotation"
+    final mag = event.magnitude ?? 1.0; // :contentReference[oaicite:1]{index=1}
+    final dir = event.direction == RotaryDirection.clockwise ? 1.0 : -1.0;
 
-    if (newVolume != currentVolume) {
-      HapticFeedback.lightImpact();
-      remoteState.setVolume(newVolume);
+    // Sensitivity: higher = less sensitive
+    _volumeRotaryAccum += dir * (mag / _volumeRotarySensitivity);
 
-      // Activate volume indicator
-      if (!_volumeActive) {
-        setState(() => _volumeActive = true);
-      }
+    // Only apply whole "volume steps" when we've accumulated enough.
+    final int delta = _volumeRotaryAccum.truncate(); // toward zero; good for +/-.
+    if (delta == 0) {
+      if (!_volumeActive) setState(() => _volumeActive = true);
       _scheduleVolumeDeflate();
+      return;
+    }
+    _volumeRotaryAccum -= delta; // keep remainder for smooth control
+
+    final base = _volumeTargetLevel ?? remoteState.playbackState.volumeLevel;
+    final newVolume = (base + delta).clamp(0, 100);
+    if (newVolume == base) return;
+
+    HapticFeedback.selectionClick();
+
+    _volumeTargetLevel = newVolume;
+    _volumePreviewLevel = newVolume;
+    _queueVolumeSend(remoteState, newVolume);
+
+    if (!_volumeActive) {
+      setState(() => _volumeActive = true);
+    } else {
+      setState(() {});
+    }
+    _scheduleVolumeDeflate();
+  }
+
+
+  void _queueVolumeSend(RemoteState remoteState, int level) {
+    _pendingVolumeToSend = level;
+
+    // Throttle: send immediately, then at most once per interval with latest.
+    if (_volumeSendTimer != null) return;
+    _flushVolumeSend(remoteState);
+    _volumeSendTimer = Timer(_volumeSendInterval, () => _onVolumeSendTimer(remoteState));
+  }
+
+  void _onVolumeSendTimer(RemoteState remoteState) {
+    _volumeSendTimer = null;
+
+    if (_pendingVolumeToSend != null && _pendingVolumeToSend != _lastSentVolume) {
+      _flushVolumeSend(remoteState);
+      _volumeSendTimer = Timer(_volumeSendInterval, () => _onVolumeSendTimer(remoteState));
+    } else {
+      _pendingVolumeToSend = null;
     }
   }
+
+  void _flushVolumeSend(RemoteState remoteState) {
+    final v = _pendingVolumeToSend;
+    if (v == null || v == _lastSentVolume) return;
+
+    _lastSentVolume = v;
+    remoteState.setVolume(v);
+  }
+
+
 
   void _scheduleVolumeDeflate() {
     _volumeDeflateTimer?.cancel();
     _volumeDeflateTimer = Timer(const Duration(milliseconds: 500), () {
-      if (mounted) {
-        setState(() => _volumeActive = false);
-      }
+      if (!mounted) return;
+      setState(() => _volumeActive = false);
+    });
+
+    // Failsafe: if playback never catches up, drop the preview eventually.
+    _volumePreviewFailsafeTimer?.cancel();
+    _volumePreviewFailsafeTimer = Timer(const Duration(milliseconds: 1500), () {
+      if (!mounted) return;
+      setState(() {
+        _volumePreviewLevel = null;
+        _volumeTargetLevel = null;
+      });
     });
   }
+
+
 
   Future<void> _playPause() async {
     HapticFeedback.mediumImpact();
@@ -151,21 +251,37 @@ class _RemoteScreenState extends State<RemoteScreen>
       backgroundColor: WearTheme.background,
       body: Consumer<RemoteState>(
         builder: (context, remoteState, child) {
-          return RotaryPageView(
-            controller: _pageController,
-            onPageChanged: (index) {
-              // Clear volume active when switching pages
-              if (index != 0 && _volumeActive) {
-                setState(() => _volumeActive = false);
-              }
-            },
+          return Stack(
             children: [
-              // Page 1: Remote Controls
-              _buildRemoteControlsPage(remoteState),
-              // Page 2: Seek Screen
-              const SeekScreen(),
-              // Page 3: Media Selection
-              const MediaSelectionScreen(),
+              // Main PageView content
+              PageView(
+                controller: _pageController,
+                scrollDirection: Axis.vertical,
+                physics: const PageScrollPhysics(),
+                onPageChanged: (index) {
+                  // Clear volume active when switching pages
+                  if (index != 0 && _volumeActive) {
+                    setState(() => _volumeActive = false);
+                  }
+                },
+                children: [
+                  // Page 1: Remote Controls
+                  _buildRemoteControlsPage(remoteState),
+                  // Page 2: Seek Screen
+                  SeekScreen(rotarySeekSeconds: _seekRotarySeconds),
+                  // Page 3: Media Selection
+                  const MediaSelectionScreen(),
+                ],
+              ),
+              // Volume popup overlay (reads volume from RemoteState - single source of truth)
+              if (_showVolumePopup)
+                VolumePopup(
+                  volume: _volumePreviewLevel ?? remoteState.playbackState.volumeLevel,
+                  isMuted: remoteState.playbackState.isMuted,
+                  onVolumeChanged: (level) => remoteState.setVolume(level),
+                  onDismiss: () => setState(() => _showVolumePopup = false),
+                  dragSensitivity: _volumeDragSensitivity,
+                ),
             ],
           );
         },
@@ -178,9 +294,28 @@ class _RemoteScreenState extends State<RemoteScreen>
     final isPlaying = playback.isPlaying;
     final isMuted = playback.isMuted;
     final volumeLevel = playback.volumeLevel;
+    final displayVolumeLevel = _volumePreviewLevel ?? volumeLevel;
     final progress = playback.progress;
     final positionTicks = playback.positionTicks;
     final durationTicks = playback.durationTicks ?? 0;
+
+    // If playback has caught up to the preview, release preview/target.
+    final preview = _volumePreviewLevel;
+    if (preview != null && (volumeLevel - preview).abs() <= 1) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+
+        final current = context.read<RemoteState>().playbackState.volumeLevel;
+        final p = _volumePreviewLevel;
+        if (p != null && (current - p).abs() <= 1) {
+          _volumePreviewFailsafeTimer?.cancel();
+          setState(() {
+            _volumePreviewLevel = null;
+            _volumeTargetLevel = null;
+          });
+        }
+      });
+    }
 
     return Stack(
       fit: StackFit.expand,
@@ -194,16 +329,6 @@ class _RemoteScreenState extends State<RemoteScreen>
             progress: progress,
             strokeWidth: 6,
             edgePadding: 4,
-          ),
-        ),
-
-        // Volume arc (top, inside playback ring) - make it non-interactive on this page
-        IgnorePointer(
-          child: VolumeArc(
-            volumeLevel: volumeLevel,
-            isMuted: isMuted,
-            handleRotary: false,
-            edgePadding: 14,
           ),
         ),
 
@@ -233,7 +358,16 @@ class _RemoteScreenState extends State<RemoteScreen>
                   ],
                 ),
 
-                const SizedBox(height: 16),
+                const SizedBox(height: 8),
+
+                // Volume button (tap to open popup)
+                VolumeButton(
+                  volumeLevel: displayVolumeLevel,
+                  isMuted: isMuted,
+                  onTap: () => setState(() => _showVolumePopup = true),
+                ),
+
+                const SizedBox(height: 8),
 
                 // Main control buttons row: Previous, Play/Pause, Next
                 Row(
@@ -298,7 +432,7 @@ class _RemoteScreenState extends State<RemoteScreen>
             right: 0,
             child: IgnorePointer(
               child: Text(
-                isMuted ? 'MUTED' : '$volumeLevel%',
+                isMuted ? 'MUTED' : '$displayVolumeLevel%',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: isMuted
