@@ -4,7 +4,7 @@ A [Jellyfin](https://github.com/jellyfin/jellyfin) companion app for Wear OS tha
 
 Easily manage what's playing without reaching for your phone or TV remote.
 
-<a href="https://play.google.com/store/apps/details?id=YOUR_APP_ID">
+<a href="https://play.google.com/store/apps/details?id=com.jellywear.jellyfin_wear_os">
   <img alt="Get it on Google Play" src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" height="80"/>
 </a>
 
