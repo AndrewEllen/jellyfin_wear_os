@@ -33,8 +33,8 @@ class _SplashScreenState extends State<SplashScreen> {
     if (!mounted) return;
 
     if (success) {
-      // We have valid auth, go to home
-      Navigator.of(context).pushReplacementNamed(AppRoutes.home);
+      // We have valid auth, go to session picker
+      Navigator.of(context).pushReplacementNamed(AppRoutes.sessionPicker);
     } else {
       // No valid auth, go to server list
       Navigator.of(context).pushReplacementNamed(AppRoutes.serverList);

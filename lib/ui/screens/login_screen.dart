@@ -139,7 +139,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (success) {
         Navigator.pushNamedAndRemoveUntil(
           context,
-          AppRoutes.home,
+          AppRoutes.sessionPicker,
           (route) => false,
         );
       } else {

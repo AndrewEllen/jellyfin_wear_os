@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../ui/screens/splash_screen.dart';
-import '../ui/screens/home_screen.dart';
 import '../ui/screens/server_list_screen.dart';
 import '../ui/screens/manual_server_screen.dart';
 import '../ui/screens/login_screen.dart';
@@ -11,12 +10,12 @@ import '../ui/screens/session_picker_screen.dart';
 import '../ui/screens/remote_screen.dart';
 import '../ui/screens/seek_screen.dart';
 import '../ui/screens/track_picker_screen.dart';
+import '../ui/screens/media_selection_screen.dart';
 import '../ui/screens/settings_screen.dart';
 
 /// Named routes for the application.
 abstract class AppRoutes {
   static const String splash = '/';
-  static const String home = '/home';
   static const String serverList = '/servers';
   static const String manualServer = '/servers/manual';
   static const String login = '/login';
@@ -27,6 +26,7 @@ abstract class AppRoutes {
   static const String remote = '/remote';
   static const String seek = '/remote/seek';
   static const String trackPicker = '/remote/tracks';
+  static const String mediaSelection = '/remote/media';
   static const String settings = '/settings';
 }
 
@@ -36,9 +36,6 @@ class AppRouter {
     switch (settings.name) {
       case AppRoutes.splash:
         return _buildRoute(const SplashScreen(), settings);
-
-      case AppRoutes.home:
-        return _buildRoute(const HomeScreen(), settings);
 
       case AppRoutes.serverList:
         return _buildRoute(const ServerListScreen(), settings);
@@ -74,6 +71,9 @@ class AppRouter {
       case AppRoutes.trackPicker:
         final args = settings.arguments as TrackPickerArgs?;
         return _buildRoute(TrackPickerScreen(args: args), settings);
+
+      case AppRoutes.mediaSelection:
+        return _buildRoute(const MediaSelectionScreen(), settings);
 
       case AppRoutes.settings:
         return _buildRoute(const SettingsScreen(), settings);

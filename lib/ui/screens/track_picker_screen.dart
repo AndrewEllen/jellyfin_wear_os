@@ -1,15 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+
 import '../../core/constants/jellyfin_constants.dart';
 import '../../core/theme/wear_theme.dart';
-import '../../core/utils/watch_shape.dart';
 import '../../data/models/playback_state.dart';
 import '../../navigation/app_router.dart';
 import '../../state/remote_state.dart';
-import '../widgets/common/wear_list_view.dart';
+import '../widgets/common/rotary_wheel_list.dart';
 
 /// Screen for selecting audio or subtitle tracks.
+///
+/// Uses RotaryWheelList for a Wear-style wheel list with scale/fade effect.
 class TrackPickerScreen extends StatefulWidget {
   final TrackPickerArgs? args;
 
@@ -111,13 +113,12 @@ class _TrackPickerScreenState extends State<TrackPickerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final padding = WatchShape.edgePadding(context);
     final title = isAudio ? 'Audio' : 'Subtitles';
 
     if (_isLoading) {
-      return Scaffold(
+      return const Scaffold(
         backgroundColor: WearTheme.background,
-        body: const Center(
+        body: Center(
           child: CircularProgressIndicator(),
         ),
       );
@@ -128,7 +129,7 @@ class _TrackPickerScreenState extends State<TrackPickerScreen> {
         backgroundColor: WearTheme.background,
         body: Center(
           child: Padding(
-            padding: padding,
+            padding: const EdgeInsets.all(16),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -156,111 +157,75 @@ class _TrackPickerScreenState extends State<TrackPickerScreen> {
 
     return Scaffold(
       backgroundColor: WearTheme.background,
-      body: WearListView(
-        children: [
-          // Header
-          _buildHeader(context, title, padding),
-          // Tracks
-          ..._tracks.map((track) => _buildTrackTile(context, track, padding)),
-        ],
+      body: RotaryWheelList<_Track>(
+        items: _tracks,
+        itemExtent: 80,
+        onItemTap: (track, index) => _selectTrack(track),
+        itemBuilder: (context, track, index, isCentered) {
+          return _buildTrackCard(track, isCentered);
+        },
       ),
     );
   }
 
-  Widget _buildHeader(BuildContext context, String title, EdgeInsets padding) {
-    return SizedBox(
-      height: MediaQuery.of(context).size.height,
-      child: Center(
-        child: Padding(
-          padding: padding,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                isAudio ? Icons.audiotrack : Icons.closed_caption,
-                size: 28,
-                color: WearTheme.jellyfinPurple,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                title,
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTrackTile(
-    BuildContext context,
-    _Track track,
-    EdgeInsets padding,
-  ) {
+  Widget _buildTrackCard(_Track track, bool isCentered) {
     final isSelected = track.index == _selectedIndex;
 
-    return SizedBox(
-      height: MediaQuery.of(context).size.height,
-      child: Center(
-        child: Padding(
-          padding: padding,
-          child: InkWell(
-            onTap: () => _selectTrack(track),
-            borderRadius: BorderRadius.circular(16),
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: isSelected ? WearTheme.jellyfinPurple.withOpacity(0.2) : WearTheme.surface,
-                borderRadius: BorderRadius.circular(16),
-                border: isSelected
-                    ? Border.all(color: WearTheme.jellyfinPurple, width: 2)
-                    : null,
-              ),
-              child: Row(
-                children: [
-                  if (isSelected)
-                    const Icon(
-                      Icons.check_circle,
-                      size: 24,
-                      color: WearTheme.jellyfinPurple,
-                    )
-                  else
-                    const Icon(
-                      Icons.circle_outlined,
-                      size: 24,
-                      color: WearTheme.textSecondary,
-                    ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          track.name,
-                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                fontWeight: isSelected ? FontWeight.bold : null,
-                              ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: isSelected
+            ? WearTheme.jellyfinPurple.withValues(alpha: 0.2)
+            : (isCentered ? WearTheme.surface : WearTheme.surfaceVariant),
+        borderRadius: BorderRadius.circular(16),
+        border: isSelected
+            ? Border.all(color: WearTheme.jellyfinPurple, width: 2)
+            : (isCentered
+                ? Border.all(color: WearTheme.textSecondary.withValues(alpha: 0.3), width: 1)
+                : null),
+      ),
+      child: Row(
+        children: [
+          if (isSelected)
+            const Icon(
+              Icons.check_circle,
+              size: 24,
+              color: WearTheme.jellyfinPurple,
+            )
+          else
+            Icon(
+              Icons.circle_outlined,
+              size: 24,
+              color: isCentered ? WearTheme.textSecondary : WearTheme.textDisabled,
+            ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  track.name,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        fontWeight: isSelected || isCentered ? FontWeight.bold : null,
+                      ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (track.language.isNotEmpty)
+                  Text(
+                    track.language,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: WearTheme.textSecondary,
                         ),
-                        if (track.language.isNotEmpty)
-                          Text(
-                            track.language,
-                            style: Theme.of(context).textTheme.bodySmall,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                      ],
-                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                ],
-              ),
+              ],
             ),
           ),
-        ),
+        ],
       ),
     );
   }

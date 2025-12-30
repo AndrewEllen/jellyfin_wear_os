@@ -1,16 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/constants/jellyfin_constants.dart';
 import '../../core/theme/wear_theme.dart';
-import '../../core/utils/watch_shape.dart';
 import '../../data/models/session_device.dart';
 import '../../navigation/app_router.dart';
 import '../../state/remote_state.dart';
 import '../../state/session_state.dart';
-import '../widgets/common/wear_list_view.dart';
+import '../widgets/common/rotary_wheel_list.dart';
 
 /// Screen for selecting a target Jellyfin session to control.
+///
+/// Uses RotaryWheelList for a Wear-style wheel list with scale/fade effect.
 class SessionPickerScreen extends StatefulWidget {
   final SessionPickerArgs? args;
 
@@ -32,6 +34,8 @@ class _SessionPickerScreenState extends State<SessionPickerScreen> {
   }
 
   Future<void> _selectSession(SessionDevice session) async {
+    HapticFeedback.mediumImpact();
+
     final itemIdToPlay = widget.args?.itemIdToPlay;
     final itemName = widget.args?.itemName;
 
@@ -69,8 +73,6 @@ class _SessionPickerScreenState extends State<SessionPickerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final padding = WatchShape.edgePadding(context);
-
     return Scaffold(
       backgroundColor: WearTheme.background,
       body: Consumer<SessionState>(
@@ -80,154 +82,165 @@ class _SessionPickerScreenState extends State<SessionPickerScreen> {
           }
 
           if (state.errorMessage != null && state.errorMessage!.isNotEmpty) {
-            return Center(
-              child: Padding(
-                padding: padding,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.error_outline, size: 32, color: WearTheme.textSecondary),
-                    const SizedBox(height: 8),
-                    Text('Failed to load sessions', style: Theme.of(context).textTheme.titleMedium),
-                    const SizedBox(height: 6),
-                    Text(
-                      state.errorMessage!,
-                      style: Theme.of(context).textTheme.bodySmall,
-                      textAlign: TextAlign.center,
-                      maxLines: 8,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 14),
-                    TextButton.icon(
-                      onPressed: () => context.read<SessionState>().refreshSessions(),
-                      icon: const Icon(Icons.refresh, size: 18),
-                      label: const Text('Refresh'),
-                    ),
-                  ],
-                ),
-              ),
-            );
+            return _buildErrorState(state.errorMessage!);
           }
 
           final sessions = state.sessions;
 
           if (sessions.isEmpty) {
-            return Center(
-              child: Padding(
-                padding: padding,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.devices_outlined, size: 32, color: WearTheme.textSecondary),
-                    const SizedBox(height: 8),
-                    Text('No Devices', style: Theme.of(context).textTheme.titleMedium),
-                    const SizedBox(height: 4),
-                    Text(
-                      'No active Jellyfin\nclients found',
-                      style: Theme.of(context).textTheme.bodySmall,
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 16),
-                    TextButton.icon(
-                      onPressed: () => context.read<SessionState>().refreshSessions(),
-                      icon: const Icon(Icons.refresh, size: 18),
-                      label: const Text('Refresh'),
-                    ),
-                  ],
-                ),
-              ),
-            );
+            return _buildEmptyState();
           }
 
-          return WearListView(
-            children: [
-              _buildHeader(context, padding),
-              ...sessions.map((s) => _buildSessionTile(context, s, padding)),
-            ],
+          return RotaryWheelList<SessionDevice>(
+            items: sessions,
+            itemExtent: 90,
+            onItemTap: (session, index) => _selectSession(session),
+            itemBuilder: (context, session, index, isCentered) {
+              return _buildSessionCard(session, isCentered);
+            },
           );
         },
       ),
     );
   }
 
-  Widget _buildHeader(BuildContext context, EdgeInsets padding) {
-    return SizedBox(
-      height: MediaQuery.of(context).size.height,
-      child: Center(
-        child: Padding(
-          padding: padding,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.devices_outlined, size: 28, color: WearTheme.jellyfinPurple),
-              const SizedBox(height: 8),
-              Text('Select Device', style: Theme.of(context).textTheme.titleLarge),
-            ],
-          ),
+  Widget _buildErrorState(String errorMessage) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.error_outline,
+              size: 32,
+              color: WearTheme.textSecondary,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Failed to load sessions',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              errorMessage,
+              style: Theme.of(context).textTheme.bodySmall,
+              textAlign: TextAlign.center,
+              maxLines: 4,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 14),
+            TextButton.icon(
+              onPressed: () => context.read<SessionState>().refreshSessions(),
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text('Refresh'),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildSessionTile(BuildContext context, SessionDevice session, EdgeInsets padding) {
+  Widget _buildEmptyState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.devices_outlined,
+              size: 32,
+              color: WearTheme.textSecondary,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'No Devices',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'No active Jellyfin\nclients found',
+              style: Theme.of(context).textTheme.bodySmall,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            TextButton.icon(
+              onPressed: () => context.read<SessionState>().refreshSessions(),
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text('Refresh'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSessionCard(SessionDevice session, bool isCentered) {
     final subtitleParts = <String>[];
     if (session.client.isNotEmpty) subtitleParts.add(session.client);
-    if (session.userName != null && session.userName!.isNotEmpty) subtitleParts.add(session.userName!);
-    final subtitle = subtitleParts.isEmpty ? 'Jellyfin Client' : subtitleParts.join(' • ');
+    if (session.userName != null && session.userName!.isNotEmpty) {
+      subtitleParts.add(session.userName!);
+    }
+    final subtitle =
+        subtitleParts.isEmpty ? 'Jellyfin Client' : subtitleParts.join(' • ');
 
-    return SizedBox(
-      height: MediaQuery.of(context).size.height,
-      child: Center(
-        child: Padding(
-          padding: padding,
-          child: InkWell(
-            onTap: () => _selectSession(session),
-            borderRadius: BorderRadius.circular(16),
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: WearTheme.surface,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Row(
-                children: [
-                  Icon(session.icon, size: 28, color: WearTheme.jellyfinPurple),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          session.deviceName,
-                          style: Theme.of(context).textTheme.bodyMedium,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: isCentered ? WearTheme.surface : WearTheme.surfaceVariant,
+        borderRadius: BorderRadius.circular(16),
+        border: isCentered
+            ? Border.all(color: WearTheme.jellyfinPurple, width: 1.5)
+            : null,
+      ),
+      child: Row(
+        children: [
+          Icon(
+            session.icon,
+            size: 28,
+            color: isCentered ? WearTheme.jellyfinPurple : WearTheme.textSecondary,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  session.deviceName,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        fontWeight: isCentered ? FontWeight.bold : null,
+                      ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  subtitle,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: WearTheme.textSecondary,
+                      ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (session.nowPlayingItemName != null &&
+                    session.nowPlayingItemName!.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    '▶ ${session.nowPlayingItemName!}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: WearTheme.jellyfinPurple,
+                          fontSize: 10,
                         ),
-                        Text(
-                          subtitle,
-                          style: Theme.of(context).textTheme.bodySmall,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        if (session.nowPlayingItemName != null && session.nowPlayingItemName!.isNotEmpty) ...[
-                          const SizedBox(height: 2),
-                          Text(
-                            session.nowPlayingItemName!,
-                            style: Theme.of(context).textTheme.bodySmall,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ],
-                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ],
-              ),
+              ],
             ),
           ),
-        ),
+        ],
       ),
     );
   }

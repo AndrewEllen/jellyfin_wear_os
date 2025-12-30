@@ -225,4 +225,56 @@ class LibraryRepository {
       maxWidth: maxWidth,
     );
   }
+
+  /// Gets items that the user has started watching but not finished.
+  Future<List<LibraryItem>> getContinueWatching({int limit = 10}) async {
+    final userId = _client.userId;
+    if (userId == null) return [];
+
+    try {
+      final response = await _client.get(
+        '/Users/$userId/Items/Resume',
+        queryParameters: {
+          'limit': limit,
+          'fields': 'Overview,PrimaryImageAspectRatio',
+          'imageTypeLimit': 1,
+          'enableImageTypes': 'Primary,Backdrop,Thumb',
+          'mediaTypes': 'Video',
+        },
+      );
+
+      final data = response.data as Map<String, dynamic>;
+      final items = data['Items'] as List<dynamic>? ?? [];
+
+      return items.map((json) => LibraryItem.fromJson(json as Map<String, dynamic>)).toList();
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// Gets the most recently added items.
+  Future<List<LibraryItem>> getRecentlyAdded({int limit = 10}) async {
+    final userId = _client.userId;
+    if (userId == null) return [];
+
+    try {
+      final response = await _client.get(
+        '/Users/$userId/Items/Latest',
+        queryParameters: {
+          'limit': limit,
+          'fields': 'Overview,PrimaryImageAspectRatio',
+          'imageTypeLimit': 1,
+          'enableImageTypes': 'Primary,Backdrop',
+          'includeItemTypes': 'Movie,Episode',
+        },
+      );
+
+      // /Latest returns an array directly, not wrapped in Items
+      final items = response.data as List<dynamic>? ?? [];
+
+      return items.map((json) => LibraryItem.fromJson(json as Map<String, dynamic>)).toList();
+    } catch (e) {
+      return [];
+    }
+  }
 }

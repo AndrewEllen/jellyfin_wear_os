@@ -1,15 +1,29 @@
+import 'dart:async';
+import 'dart:ui';
+
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:wearable_rotary/wearable_rotary.dart';
 
 import '../../core/services/ongoing_activity_service.dart';
 import '../../core/theme/wear_theme.dart';
-import '../../core/utils/watch_shape.dart';
+import '../../data/repositories/library_repository.dart';
 import '../../navigation/app_router.dart';
 import '../../state/remote_state.dart';
-import '../widgets/common/wear_list_view.dart';
+import '../widgets/remote/playback_ring.dart';
+import '../widgets/remote/volume_arc.dart';
 
-/// Main remote control screen with transport controls and now playing info.
+/// Main remote control screen with transport controls, playback ring, and volume arc.
+///
+/// Features:
+/// - Blurred background from now-playing artwork
+/// - Full-circle playback progress ring at screen edge
+/// - Volume arc at top (120°) inside the playback ring
+/// - Center controls: play/pause, CC, audio, stop
+/// - Rotary controls volume
+/// - Swipe left for Seek, swipe right for Media Selection
 class RemoteScreen extends StatefulWidget {
   const RemoteScreen({super.key});
 
@@ -18,20 +32,58 @@ class RemoteScreen extends StatefulWidget {
 }
 
 class _RemoteScreenState extends State<RemoteScreen> {
+  StreamSubscription<RotaryEvent>? _rotarySubscription;
+  Timer? _volumeDeflateTimer;
+  bool _volumeActive = false;
+
   @override
   void initState() {
     super.initState();
     OngoingActivityService.start(title: 'Jellyfin Remote');
+
     // Start polling playback state
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<RemoteState>().startPolling();
     });
+
+    // Rotary controls volume on this screen
+    _rotarySubscription = rotaryEvents.listen(_onRotaryEvent);
   }
 
   @override
   void dispose() {
+    _volumeDeflateTimer?.cancel();
+    _rotarySubscription?.cancel();
     OngoingActivityService.stop();
     super.dispose();
+  }
+
+  void _onRotaryEvent(RotaryEvent event) {
+    final remoteState = context.read<RemoteState>();
+    final currentVolume = remoteState.playbackState.volumeLevel;
+
+    final delta = event.direction == RotaryDirection.clockwise ? 5 : -5;
+    final newVolume = (currentVolume + delta).clamp(0, 100);
+
+    if (newVolume != currentVolume) {
+      HapticFeedback.lightImpact();
+      remoteState.setVolume(newVolume);
+
+      // Activate volume indicator
+      if (!_volumeActive) {
+        setState(() => _volumeActive = true);
+      }
+      _scheduleVolumeDeflate();
+    }
+  }
+
+  void _scheduleVolumeDeflate() {
+    _volumeDeflateTimer?.cancel();
+    _volumeDeflateTimer = Timer(const Duration(milliseconds: 500), () {
+      if (mounted) {
+        setState(() => _volumeActive = false);
+      }
+    });
   }
 
   Future<void> _playPause() async {
@@ -42,31 +94,6 @@ class _RemoteScreenState extends State<RemoteScreen> {
   Future<void> _stop() async {
     HapticFeedback.mediumImpact();
     await context.read<RemoteState>().stop();
-  }
-
-  Future<void> _previous() async {
-    HapticFeedback.mediumImpact();
-    await context.read<RemoteState>().previous();
-  }
-
-  Future<void> _next() async {
-    HapticFeedback.mediumImpact();
-    await context.read<RemoteState>().next();
-  }
-
-  Future<void> _volumeUp() async {
-    HapticFeedback.lightImpact();
-    await context.read<RemoteState>().volumeUp();
-  }
-
-  Future<void> _volumeDown() async {
-    HapticFeedback.lightImpact();
-    await context.read<RemoteState>().volumeDown();
-  }
-
-  Future<void> _toggleMute() async {
-    HapticFeedback.mediumImpact();
-    await context.read<RemoteState>().toggleMute();
   }
 
   void _openSeek() {
@@ -89,10 +116,23 @@ class _RemoteScreenState extends State<RemoteScreen> {
     );
   }
 
+  void _openMediaSelection() {
+    Navigator.pushNamed(context, AppRoutes.mediaSelection);
+  }
+
+  String _formatTime(int ticks) {
+    final seconds = ticks ~/ 10000000;
+    final minutes = seconds ~/ 60;
+    final hours = minutes ~/ 60;
+
+    if (hours > 0) {
+      return '$hours:${(minutes % 60).toString().padLeft(2, '0')}:${(seconds % 60).toString().padLeft(2, '0')}';
+    }
+    return '$minutes:${(seconds % 60).toString().padLeft(2, '0')}';
+  }
+
   @override
   Widget build(BuildContext context) {
-    final padding = WatchShape.edgePadding(context);
-
     return Scaffold(
       backgroundColor: WearTheme.background,
       body: Consumer<RemoteState>(
@@ -100,234 +140,231 @@ class _RemoteScreenState extends State<RemoteScreen> {
           final playback = remoteState.playbackState;
           final isPlaying = playback.isPlaying;
           final isMuted = playback.isMuted;
-          final nowPlayingTitle = playback.nowPlayingItemName ?? 'Nothing Playing';
-          final nowPlayingSubtitle = playback.nowPlayingArtist ?? playback.nowPlayingAlbum ?? '';
+          final volumeLevel = playback.volumeLevel;
           final progress = playback.progress;
+          final positionTicks = playback.positionTicks;
+          final durationTicks = playback.durationTicks ?? 0;
 
-          return WearListView(
-            children: [
-              // Now playing info
-              _buildNowPlaying(
-                context,
-                padding,
-                title: nowPlayingTitle,
-                subtitle: nowPlayingSubtitle,
-                progress: progress,
-              ),
-              // Transport controls
-              _buildTransportControls(context, padding, isPlaying: isPlaying),
-              // Volume controls
-              _buildVolumeControls(context, padding, isMuted: isMuted),
-              // Track selection
-              _buildTrackControls(context, padding),
-            ],
+          return GestureDetector(
+            // Swipe left to open seek
+            onHorizontalDragEnd: (details) {
+              if (details.primaryVelocity != null) {
+                if (details.primaryVelocity! < -200) {
+                  // Swipe left
+                  _openSeek();
+                } else if (details.primaryVelocity! > 200) {
+                  // Swipe right
+                  _openMediaSelection();
+                }
+              }
+            },
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                // Blurred background image
+                _buildBackground(playback.nowPlayingItemId),
+
+                // Playback progress ring (outer)
+                PlaybackRing(
+                  progress: progress,
+                  strokeWidth: 6,
+                  edgePadding: 4,
+                ),
+
+                // Volume arc (top, inside playback ring)
+                VolumeArc(
+                  volumeLevel: volumeLevel,
+                  isMuted: isMuted,
+                  handleRotary: false, // We handle rotary in this screen
+                  onVolumeChanged: (level) {
+                    remoteState.setVolume(level);
+                    if (!_volumeActive) {
+                      setState(() => _volumeActive = true);
+                    }
+                    _scheduleVolumeDeflate();
+                  },
+                  edgePadding: 14, // Inside the playback ring
+                ),
+
+                // Center content
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Timestamp (tap to open seek)
+                        GestureDetector(
+                          onTap: _openSeek,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                _formatTime(positionTicks),
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleLarge
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                              ),
+                              Text(
+                                _formatTime(durationTicks),
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(
+                                      color: WearTheme.textSecondary,
+                                    ),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        const SizedBox(height: 12),
+
+                        // Control buttons row
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: [
+                            // Subtitles button
+                            _ControlButton(
+                              icon: Icons.closed_caption,
+                              onTap: _openSubtitleTracks,
+                              size: 28,
+                            ),
+
+                            // Play/Pause button (larger, highlighted)
+                            _ControlButton(
+                              icon: isPlaying ? Icons.pause : Icons.play_arrow,
+                              onTap: _playPause,
+                              size: 40,
+                              highlighted: true,
+                            ),
+
+                            // Audio tracks button
+                            _ControlButton(
+                              icon: Icons.audiotrack,
+                              onTap: _openAudioTracks,
+                              size: 28,
+                            ),
+                          ],
+                        ),
+
+                        const SizedBox(height: 8),
+
+                        // Stop button
+                        _ControlButton(
+                          icon: Icons.stop,
+                          onTap: _stop,
+                          size: 24,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // Volume active indicator (shows when adjusting volume)
+                if (_volumeActive)
+                  Positioned(
+                    top: 32,
+                    left: 0,
+                    right: 0,
+                    child: Text(
+                      isMuted ? 'MUTED' : '$volumeLevel%',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: isMuted
+                            ? WearTheme.textSecondary
+                            : const Color(0xFFFFD700),
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           );
         },
       ),
     );
   }
 
-  Widget _buildNowPlaying(
-    BuildContext context,
-    EdgeInsets padding, {
-    required String title,
-    required String subtitle,
-    required double progress,
-  }) {
-    return SizedBox(
-      height: MediaQuery.of(context).size.height,
-      child: Center(
-        child: Padding(
-          padding: padding,
-          child: GestureDetector(
-            onTap: _openSeek,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Thumbnail placeholder
-                Container(
-                  width: 64,
-                  height: 64,
-                  decoration: BoxDecoration(
-                    color: WearTheme.surfaceVariant,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(
-                    Icons.music_note,
-                    color: WearTheme.textSecondary,
-                    size: 32,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  title,
-                  style: Theme.of(context).textTheme.titleMedium,
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                if (subtitle.isNotEmpty)
-                  Text(
-                    subtitle,
-                    style: Theme.of(context).textTheme.bodySmall,
-                    textAlign: TextAlign.center,
-                  ),
-                const SizedBox(height: 8),
-                // Progress bar
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(2),
-                  child: LinearProgressIndicator(
-                    value: progress,
-                    minHeight: 3,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+  Widget _buildBackground(String? itemId) {
+    if (itemId == null) {
+      return Container(color: WearTheme.background);
+    }
 
-  Widget _buildTransportControls(
-    BuildContext context,
-    EdgeInsets padding, {
-    required bool isPlaying,
-  }) {
-    return SizedBox(
-      height: MediaQuery.of(context).size.height,
-      child: Center(
-        child: Padding(
-          padding: padding,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              IconButton(
-                onPressed: _previous,
-                icon: const Icon(Icons.skip_previous, size: 32),
-              ),
-              Container(
-                decoration: BoxDecoration(
-                  color: WearTheme.jellyfinPurple,
-                  shape: BoxShape.circle,
-                ),
-                child: IconButton(
-                  onPressed: _playPause,
-                  icon: Icon(
-                    isPlaying ? Icons.pause : Icons.play_arrow,
-                    size: 36,
-                  ),
-                ),
-              ),
-              IconButton(
-                onPressed: _next,
-                icon: const Icon(Icons.skip_next, size: 32),
-              ),
-            ],
-          ),
-        ),
-      ),
+    final libraryRepo = context.read<LibraryRepository>();
+    final imageUrl = libraryRepo.getImageUrl(
+      itemId,
+      imageType: 'Backdrop',
+      maxWidth: 400,
     );
-  }
 
-  Widget _buildVolumeControls(
-    BuildContext context,
-    EdgeInsets padding, {
-    required bool isMuted,
-  }) {
-    return SizedBox(
-      height: MediaQuery.of(context).size.height,
-      child: Center(
-        child: Padding(
-          padding: padding,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              IconButton(
-                onPressed: _volumeDown,
-                icon: const Icon(Icons.volume_down, size: 28),
-              ),
-              IconButton(
-                onPressed: _toggleMute,
-                icon: Icon(
-                  isMuted ? Icons.volume_off : Icons.volume_up,
-                  size: 28,
-                  color: isMuted ? WearTheme.textSecondary : null,
-                ),
-              ),
-              IconButton(
-                onPressed: _volumeUp,
-                icon: const Icon(Icons.volume_up, size: 28),
-              ),
-            ],
+    if (imageUrl == null) {
+      return Container(color: WearTheme.background);
+    }
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // Background image
+        CachedNetworkImage(
+          imageUrl: imageUrl,
+          fit: BoxFit.cover,
+          errorWidget: (context, url, error) =>
+              Container(color: WearTheme.background),
+          placeholder: (context, url) =>
+              Container(color: WearTheme.background),
+        ),
+        // Blur overlay
+        BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 25, sigmaY: 25),
+          child: Container(
+            color: Colors.black.withValues(alpha: 0.6),
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildTrackControls(BuildContext context, EdgeInsets padding) {
-    return SizedBox(
-      height: MediaQuery.of(context).size.height,
-      child: Center(
-        child: Padding(
-          padding: padding,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              _TrackButton(
-                icon: Icons.audiotrack,
-                label: 'Audio',
-                onTap: _openAudioTracks,
-              ),
-              _TrackButton(
-                icon: Icons.closed_caption,
-                label: 'Subs',
-                onTap: _openSubtitleTracks,
-              ),
-              _TrackButton(
-                icon: Icons.stop,
-                label: 'Stop',
-                onTap: _stop,
-              ),
-            ],
-          ),
-        ),
-      ),
+      ],
     );
   }
 }
 
-class _TrackButton extends StatelessWidget {
+class _ControlButton extends StatelessWidget {
   final IconData icon;
-  final String label;
   final VoidCallback onTap;
+  final double size;
+  final bool highlighted;
 
-  const _TrackButton({
+  const _ControlButton({
     required this.icon,
-    required this.label,
     required this.onTap,
+    this.size = 28,
+    this.highlighted = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 24),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
+    if (highlighted) {
+      return Container(
+        decoration: const BoxDecoration(
+          color: WearTheme.jellyfinPurple,
+          shape: BoxShape.circle,
         ),
-      ),
+        child: IconButton(
+          onPressed: onTap,
+          icon: Icon(icon, size: size),
+          padding: const EdgeInsets.all(8),
+          constraints: const BoxConstraints(),
+        ),
+      );
+    }
+
+    return IconButton(
+      onPressed: onTap,
+      icon: Icon(icon, size: size),
+      padding: const EdgeInsets.all(4),
+      constraints: const BoxConstraints(),
     );
   }
 }

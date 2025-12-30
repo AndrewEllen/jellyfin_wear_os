@@ -3,10 +3,20 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import 'package:wearable_rotary/wearable_rotary.dart';
-import '../../core/theme/wear_theme.dart';
 
-/// Seek screen with arc progress ring UI and rotary control.
+import '../../core/theme/wear_theme.dart';
+import '../../state/remote_state.dart';
+
+/// Seek screen with arc progress ring UI and rotary/touch control.
+///
+/// Features:
+/// - Full draggable ring UI to select timestamp
+/// - Center shows the selected time
+/// - Rotary increments/decrements timestamp
+/// - Confirm button applies the seek
+/// - Inflate/deflate animation while adjusting
 class SeekScreen extends StatefulWidget {
   const SeekScreen({super.key});
 
@@ -14,34 +24,71 @@ class SeekScreen extends StatefulWidget {
   State<SeekScreen> createState() => _SeekScreenState();
 }
 
-class _SeekScreenState extends State<SeekScreen> {
+class _SeekScreenState extends State<SeekScreen>
+    with SingleTickerProviderStateMixin {
   StreamSubscription<RotaryEvent>? _rotarySubscription;
+  Timer? _deflateTimer;
 
-  // Playback state (TODO: get from remote state)
+  late AnimationController _inflateController;
+  late Animation<double> _strokeAnimation;
+
+  // Playback state
   int _positionTicks = 0;
-  int _durationTicks = 600000000; // 1 minute default
-  bool _isDragging = false;
+  int _durationTicks = 0;
+  bool _isInteracting = false;
 
   // Seek increment in ticks (10 seconds)
   static const int _seekIncrement = 100000000;
 
+  // Stroke widths
+  static const double _normalStroke = 8.0;
+  static const double _inflatedStroke = 14.0;
+
   @override
   void initState() {
     super.initState();
+
+    _inflateController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 150),
+      reverseDuration: const Duration(milliseconds: 250),
+    );
+
+    _strokeAnimation = Tween<double>(
+      begin: _normalStroke,
+      end: _inflatedStroke,
+    ).animate(CurvedAnimation(
+      parent: _inflateController,
+      curve: Curves.easeOut,
+      reverseCurve: Curves.easeIn,
+    ));
+
+    // Initialize with current playback position
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final remoteState = context.read<RemoteState>();
+      final playback = remoteState.playbackState;
+      setState(() {
+        _positionTicks = playback.positionTicks;
+        _durationTicks = playback.durationTicks ?? 0;
+      });
+    });
+
     _rotarySubscription = rotaryEvents.listen(_onRotaryEvent);
   }
 
   @override
   void dispose() {
+    _deflateTimer?.cancel();
     _rotarySubscription?.cancel();
+    _inflateController.dispose();
     super.dispose();
   }
 
   void _onRotaryEvent(RotaryEvent event) {
-    HapticFeedback.lightImpact();
+    _onInteractionStart();
 
     setState(() {
-      _isDragging = true;
       if (event.direction == RotaryDirection.clockwise) {
         _positionTicks = math.min(_positionTicks + _seekIncrement, _durationTicks);
       } else {
@@ -49,23 +96,87 @@ class _SeekScreenState extends State<SeekScreen> {
       }
     });
 
-    // Debounce seek command
-    _scheduleSeek();
+    HapticFeedback.lightImpact();
+    _scheduleDeflate();
   }
 
-  Timer? _seekDebounce;
+  void _onInteractionStart() {
+    if (!_isInteracting) {
+      _isInteracting = true;
+      _deflateTimer?.cancel();
+      _inflateController.forward();
+    }
+  }
 
-  void _scheduleSeek() {
-    _seekDebounce?.cancel();
-    _seekDebounce = Timer(const Duration(milliseconds: 500), () {
-      _sendSeek();
-      setState(() => _isDragging = false);
+  void _scheduleDeflate() {
+    _deflateTimer?.cancel();
+    _deflateTimer = Timer(const Duration(milliseconds: 500), () {
+      if (mounted) {
+        _isInteracting = false;
+        _inflateController.reverse();
+      }
     });
   }
 
-  Future<void> _sendSeek() async {
-    // TODO: Send seek command to Jellyfin
+  void _onPanStart(DragStartDetails details) {
+    _onInteractionStart();
+    _updatePositionFromTouch(details.localPosition);
+  }
+
+  void _onPanUpdate(DragUpdateDetails details) {
+    _updatePositionFromTouch(details.localPosition);
+  }
+
+  void _onPanEnd(DragEndDetails details) {
+    _scheduleDeflate();
+  }
+
+  void _updatePositionFromTouch(Offset position) {
+    final size = context.size;
+    if (size == null || _durationTicks <= 0) return;
+
+    final center = Offset(size.width / 2, size.height / 2);
+    final touchVector = position - center;
+
+    // Calculate angle from center (0 = right, -pi/2 = top)
+    double angle = math.atan2(touchVector.dy, touchVector.dx);
+
+    // Normalize to start from top (add pi/2 to shift from right-start to top-start)
+    double normalizedAngle = angle + math.pi / 2;
+
+    // Ensure positive angle (0 to 2*pi)
+    if (normalizedAngle < 0) {
+      normalizedAngle += 2 * math.pi;
+    }
+
+    // Calculate progress (0 to 1)
+    double progress = normalizedAngle / (2 * math.pi);
+    progress = progress.clamp(0.0, 1.0);
+
+    // Convert to ticks
+    final newPosition = (progress * _durationTicks).round();
+
+    if (newPosition != _positionTicks) {
+      HapticFeedback.selectionClick();
+      setState(() {
+        _positionTicks = newPosition;
+      });
+    }
+  }
+
+  Future<void> _confirmSeek() async {
     HapticFeedback.mediumImpact();
+
+    final remoteState = context.read<RemoteState>();
+    await remoteState.seek(_positionTicks);
+
+    if (mounted) {
+      Navigator.pop(context);
+    }
+  }
+
+  void _cancel() {
+    Navigator.pop(context);
   }
 
   String _formatTime(int ticks) {
@@ -74,9 +185,9 @@ class _SeekScreenState extends State<SeekScreen> {
     final hours = minutes ~/ 60;
 
     if (hours > 0) {
-      return '${hours}:${(minutes % 60).toString().padLeft(2, '0')}:${(seconds % 60).toString().padLeft(2, '0')}';
+      return '$hours:${(minutes % 60).toString().padLeft(2, '0')}:${(seconds % 60).toString().padLeft(2, '0')}';
     }
-    return '${minutes}:${(seconds % 60).toString().padLeft(2, '0')}';
+    return '$minutes:${(seconds % 60).toString().padLeft(2, '0')}';
   }
 
   double get _progress {
@@ -90,71 +201,103 @@ class _SeekScreenState extends State<SeekScreen> {
 
     return Scaffold(
       backgroundColor: WearTheme.background,
-      body: Stack(
-        children: [
-          // Arc progress ring
-          CustomPaint(
-            size: size,
-            painter: _ArcProgressPainter(
-              progress: _progress,
-              isDragging: _isDragging,
+      body: GestureDetector(
+        onPanStart: _onPanStart,
+        onPanUpdate: _onPanUpdate,
+        onPanEnd: _onPanEnd,
+        child: Stack(
+          children: [
+            // Arc progress ring
+            AnimatedBuilder(
+              animation: _strokeAnimation,
+              builder: (context, child) {
+                return CustomPaint(
+                  size: size,
+                  painter: _SeekArcPainter(
+                    progress: _progress,
+                    strokeWidth: _strokeAnimation.value,
+                    isInteracting: _isInteracting,
+                  ),
+                );
+              },
             ),
-          ),
-          // Center content
-          Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  _formatTime(_positionTicks),
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        color: _isDragging ? WearTheme.jellyfinPurple : null,
-                      ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  _formatTime(_durationTicks),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'Rotate to seek',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: WearTheme.textSecondary,
-                      ),
-                ),
-              ],
-            ),
-          ),
-          // Back button
-          Positioned(
-            bottom: 16,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: IconButton(
-                onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.check, size: 28),
-                style: IconButton.styleFrom(
-                  backgroundColor: WearTheme.surface,
-                ),
+            // Center content
+            Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Current position
+                  Text(
+                    _formatTime(_positionTicks),
+                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: _isInteracting ? WearTheme.jellyfinPurple : null,
+                        ),
+                  ),
+                  const SizedBox(height: 4),
+                  // Duration
+                  Text(
+                    _formatTime(_durationTicks),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: WearTheme.textSecondary,
+                        ),
+                  ),
+                  const SizedBox(height: 12),
+                  // Instruction
+                  Text(
+                    'Drag or rotate to seek',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: WearTheme.textSecondary,
+                          fontSize: 10,
+                        ),
+                  ),
+                ],
               ),
             ),
-          ),
-        ],
+            // Bottom buttons
+            Positioned(
+              bottom: 16,
+              left: 0,
+              right: 0,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // Cancel button
+                  IconButton(
+                    onPressed: _cancel,
+                    icon: const Icon(Icons.close, size: 24),
+                    style: IconButton.styleFrom(
+                      backgroundColor: WearTheme.surface,
+                    ),
+                  ),
+                  const SizedBox(width: 24),
+                  // Confirm button
+                  IconButton(
+                    onPressed: _confirmSeek,
+                    icon: const Icon(Icons.check, size: 28),
+                    style: IconButton.styleFrom(
+                      backgroundColor: WearTheme.jellyfinPurple,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _ArcProgressPainter extends CustomPainter {
+class _SeekArcPainter extends CustomPainter {
   final double progress;
-  final bool isDragging;
+  final double strokeWidth;
+  final bool isInteracting;
 
-  _ArcProgressPainter({
+  _SeekArcPainter({
     required this.progress,
-    required this.isDragging,
+    required this.strokeWidth,
+    required this.isInteracting,
   });
 
   @override
@@ -165,7 +308,7 @@ class _ArcProgressPainter extends CustomPainter {
     // Track
     final trackPaint = Paint()
       ..color = WearTheme.surfaceVariant
-      ..strokeWidth = 8
+      ..strokeWidth = strokeWidth
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
@@ -174,8 +317,8 @@ class _ArcProgressPainter extends CustomPainter {
 
     // Progress arc
     final progressPaint = Paint()
-      ..color = isDragging ? WearTheme.jellyfinPurple : WearTheme.jellyfinPurpleDark
-      ..strokeWidth = 8
+      ..color = isInteracting ? WearTheme.jellyfinPurple : WearTheme.jellyfinPurpleDark
+      ..strokeWidth = strokeWidth
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
@@ -183,13 +326,15 @@ class _ArcProgressPainter extends CustomPainter {
     const startAngle = -math.pi / 2;
     final sweepAngle = 2 * math.pi * progress;
 
-    canvas.drawArc(
-      Rect.fromCircle(center: center, radius: radius),
-      startAngle,
-      sweepAngle,
-      false,
-      progressPaint,
-    );
+    if (progress > 0) {
+      canvas.drawArc(
+        Rect.fromCircle(center: center, radius: radius),
+        startAngle,
+        sweepAngle,
+        false,
+        progressPaint,
+      );
+    }
 
     // Draw position indicator dot
     if (progress > 0) {
@@ -206,7 +351,9 @@ class _ArcProgressPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _ArcProgressPainter oldDelegate) {
-    return oldDelegate.progress != progress || oldDelegate.isDragging != isDragging;
+  bool shouldRepaint(covariant _SeekArcPainter oldDelegate) {
+    return oldDelegate.progress != progress ||
+        oldDelegate.strokeWidth != strokeWidth ||
+        oldDelegate.isInteracting != isInteracting;
   }
 }
