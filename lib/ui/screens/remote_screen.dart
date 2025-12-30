@@ -51,6 +51,7 @@ class _RemoteScreenState extends State<RemoteScreen> {
   // Local target volume while adjusting (avoids stale RemoteState base).
   int? _volumeTargetLevel;
   int? _volumePreviewLevel;
+  int _lastAudibleVolume = 30;
   DateTime? _lastRotaryEventAt;
 
 // Rate-limit outbound setVolume calls.
@@ -106,6 +107,30 @@ class _RemoteScreenState extends State<RemoteScreen> {
     OngoingActivityService.stop();
     super.dispose();
   }
+
+  void _toggleMuteLikeUser(RemoteState remoteState, int displayVolumeLevel) {
+    final isMutedLike = displayVolumeLevel == 0 || remoteState.playbackState.isMuted;
+
+    if (displayVolumeLevel > 0) {
+      _lastAudibleVolume = displayVolumeLevel;
+    }
+
+    final int target = isMutedLike
+        ? _lastAudibleVolume.clamp(1, 100)
+        : 0;
+
+    _volumeTargetLevel = target;
+    _volumePreviewLevel = target;
+    _queueVolumeSend(remoteState, target);
+
+    if (!_volumeActive) {
+      setState(() => _volumeActive = true);
+    } else {
+      setState(() {});
+    }
+    _scheduleVolumeDeflate();
+  }
+
 
   void _onVolumeRotaryEvent(RotaryEvent event) {
     final page = _pageController.hasClients ? _pageController.page?.round() ?? 0 : 0;
@@ -292,9 +317,18 @@ class _RemoteScreenState extends State<RemoteScreen> {
   Widget _buildRemoteControlsPage(RemoteState remoteState) {
     final playback = remoteState.playbackState;
     final isPlaying = playback.isPlaying;
-    final isMuted = playback.isMuted;
+
     final volumeLevel = playback.volumeLevel;
     final displayVolumeLevel = _volumePreviewLevel ?? volumeLevel;
+
+    // Treat "muted" as either remote mute OR volume 0 (works even if mute isn’t a separate API).
+    final isMutedLike = playback.isMuted || displayVolumeLevel == 0;
+
+    // Keep last audible volume updated (no setState needed).
+    if (displayVolumeLevel > 0) {
+      _lastAudibleVolume = displayVolumeLevel;
+    }
+
     final progress = playback.progress;
     final positionTicks = playback.positionTicks;
     final durationTicks = playback.durationTicks ?? 0;
@@ -317,136 +351,168 @@ class _RemoteScreenState extends State<RemoteScreen> {
       });
     }
 
+    final size = MediaQuery.sizeOf(context);
+    final padding = MediaQuery.paddingOf(context);
+
+    // Inset keeps controls inside the round “safe” area.
+    final edgeInset = size.shortestSide * 0.1;
+    final top = padding.top + 16;
+    final bottom = padding.bottom + 18;
+
+    // Center controls slightly upward so bottom row doesn’t hit the clipped area.
+    final centerOffsetY = -size.shortestSide * 0.05;
+
+    final centerSecondaryText = _volumeActive
+        ? (isMutedLike ? 'MUTED' : '$displayVolumeLevel%')
+        : _formatTime(durationTicks);
+
+    const sideSlotWidth = 64.0;
+
     return Stack(
       fit: StackFit.expand,
       children: [
-        // Blurred background image
         _buildBackground(playback.nowPlayingItemId),
 
-        // Playback progress ring (outer)
+        // Ring: progress normally, volume while actively adjusting.
         IgnorePointer(
-          child: PlaybackRing(
+          child: _volumeActive
+              ? _VolumeRing(
+            volume: displayVolumeLevel,
+            isMuted: isMutedLike,
+            strokeWidth: 8,
+            edgePadding: 4,
+          )
+              : PlaybackRing(
             progress: progress,
             strokeWidth: 6,
             edgePadding: 4,
           ),
         ),
 
-        // Center content
-        Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+        // Top bar: volume (left), timestamp (center), skip next (right)
+        Positioned(
+          top: top,
+          left: edgeInset,
+          right: edgeInset,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              SizedBox(
+                width: sideSlotWidth,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: VolumeButton(
+                    volumeLevel: displayVolumeLevel,
+                    isMuted: isMutedLike,
+                    onTap: () => setState(() => _showVolumePopup = true),
+                    onLongPress: () => _toggleMuteLikeUser(remoteState, displayVolumeLevel),
+                  ),
+                ),
+              ),
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _formatTime(positionTicks),
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Text(
+                    centerSecondaryText,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: _volumeActive
+                          ? (isMutedLike ? WearTheme.textSecondary : const Color(0xFFFFD700))
+                          : WearTheme.textSecondary,
+                      fontWeight: _volumeActive ? FontWeight.bold : FontWeight.normal,
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(
+                width: sideSlotWidth,
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: _ControlButton(
+                    icon: Icons.skip_next,
+                    onTap: _skipNext,
+                    size: 24,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // Main transport: rewind/ff (wire these to your seek API) + play/pause
+        Align(
+          alignment: Alignment.center,
+          child: Transform.translate(
+            offset: Offset(0, centerOffsetY),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // Timestamp
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      _formatTime(positionTicks),
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                    ),
-                    Text(
-                      _formatTime(durationTicks),
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: WearTheme.textSecondary,
-                          ),
-                    ),
-                  ],
+                _ControlButton(
+                  icon: Icons.replay_10,
+                  onTap: () {
+                    // TODO: call the same seek method your SeekScreen uses (e.g. seekBySeconds(-10)).
+                    HapticFeedback.mediumImpact();
+                  },
+                  size: 32,
                 ),
-
-                const SizedBox(height: 8),
-
-                // Volume button (tap to open popup)
-                VolumeButton(
-                  volumeLevel: displayVolumeLevel,
-                  isMuted: isMuted,
-                  onTap: () => setState(() => _showVolumePopup = true),
+                const SizedBox(width: 12),
+                _ControlButton(
+                  icon: isPlaying ? Icons.pause : Icons.play_arrow,
+                  onTap: _playPause,
+                  size: 44,
+                  highlighted: true,
                 ),
-
-                const SizedBox(height: 8),
-
-                // Main control buttons row: Previous, Play/Pause, Next
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    _ControlButton(
-                      icon: Icons.skip_previous,
-                      onTap: _skipPrevious,
-                      size: 32,
-                    ),
-                    const SizedBox(width: 12),
-                    _ControlButton(
-                      icon: isPlaying ? Icons.pause : Icons.play_arrow,
-                      onTap: _playPause,
-                      size: 44,
-                      highlighted: true,
-                    ),
-                    const SizedBox(width: 12),
-                    _ControlButton(
-                      icon: Icons.skip_next,
-                      onTap: _skipNext,
-                      size: 32,
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 12),
-
-                // Secondary controls row: CC, Audio, Stop
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    _ControlButton(
-                      icon: Icons.closed_caption,
-                      onTap: _openSubtitleTracks,
-                      size: 24,
-                    ),
-                    const SizedBox(width: 16),
-                    _ControlButton(
-                      icon: Icons.audiotrack,
-                      onTap: _openAudioTracks,
-                      size: 24,
-                    ),
-                    const SizedBox(width: 16),
-                    _ControlButton(
-                      icon: Icons.stop,
-                      onTap: _stop,
-                      size: 24,
-                    ),
-                  ],
+                const SizedBox(width: 12),
+                _ControlButton(
+                  icon: Icons.forward_10,
+                  onTap: () {
+                    // TODO: call the same seek method your SeekScreen uses (e.g. seekBySeconds(+10)).
+                    HapticFeedback.mediumImpact();
+                  },
+                  size: 32,
                 ),
               ],
             ),
           ),
         ),
 
-        // Volume active indicator (shows when adjusting volume)
-        if (_volumeActive)
-          Positioned(
-            top: 36,
-            left: 0,
-            right: 0,
-            child: IgnorePointer(
-              child: Text(
-                isMuted ? 'MUTED' : '$displayVolumeLevel%',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: isMuted
-                      ? WearTheme.textSecondary
-                      : const Color(0xFFFFD700),
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                ),
+        // Bottom row: CC / Audio / Stop
+        Positioned(
+          bottom: bottom,
+          left: edgeInset,
+          right: edgeInset,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _ControlButton(
+                icon: Icons.closed_caption,
+                onTap: _openSubtitleTracks,
+                size: 22,
               ),
-            ),
+              const SizedBox(width: 18),
+              _ControlButton(
+                icon: Icons.audiotrack,
+                onTap: _openAudioTracks,
+                size: 22,
+              ),
+              const SizedBox(width: 18),
+              _ControlButton(
+                icon: Icons.stop,
+                onTap: _stop,
+                size: 22,
+              ),
+            ],
           ),
+        ),
       ],
     );
   }
+
 
   Widget _buildBackground(String? itemId) {
     if (itemId == null) {
@@ -524,5 +590,87 @@ class _ControlButton extends StatelessWidget {
       padding: const EdgeInsets.all(6),
       constraints: const BoxConstraints(),
     );
+  }
+
+}
+class _VolumeRing extends StatelessWidget {
+  final int volume;
+  final bool isMuted;
+  final double strokeWidth;
+  final double edgePadding;
+
+  const _VolumeRing({
+    required this.volume,
+    required this.isMuted,
+    required this.strokeWidth,
+    required this.edgePadding,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: _VolumeRingPainter(
+        volume: volume,
+        isMuted: isMuted,
+        strokeWidth: strokeWidth,
+        edgePadding: edgePadding,
+      ),
+    );
+  }
+}
+
+class _VolumeRingPainter extends CustomPainter {
+  final int volume;
+  final bool isMuted;
+  final double strokeWidth;
+  final double edgePadding;
+
+  _VolumeRingPainter({
+    required this.volume,
+    required this.isMuted,
+    required this.strokeWidth,
+    required this.edgePadding,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final shortest = size.shortestSide;
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = (shortest / 2) - edgePadding - (strokeWidth / 2);
+
+    final track = Paint()
+      ..color = WearTheme.surface
+      ..strokeWidth = strokeWidth
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawCircle(center, radius, track);
+
+    if (isMuted || volume <= 0) return;
+
+    final arc = Paint()
+      ..color = const Color(0xFFFFD700)
+      ..strokeWidth = strokeWidth
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    final sweep = (volume.clamp(0, 100) / 100.0) * (2 * 3.141592653589793);
+    final start = -3.141592653589793 / 2; // top
+
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius),
+      start,
+      sweep,
+      false,
+      arc,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _VolumeRingPainter oldDelegate) {
+    return oldDelegate.volume != volume ||
+        oldDelegate.isMuted != isMuted ||
+        oldDelegate.strokeWidth != strokeWidth ||
+        oldDelegate.edgePadding != edgePadding;
   }
 }

@@ -5,51 +5,40 @@ import '../../../core/theme/wear_theme.dart';
 
 /// Volume button with percentage indicator bar.
 ///
-/// Tap to open volume popup overlay for drag-to-adjust.
-/// Shows current volume level as a small bar above the speaker icon.
+/// Tap: open volume popup overlay.
+/// Long-press: mute/unmute (handled by parent via callback).
 class VolumeButton extends StatelessWidget {
   final int volumeLevel;
   final bool isMuted;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
 
   const VolumeButton({
     super.key,
     required this.volumeLevel,
     required this.isMuted,
     required this.onTap,
+    this.onLongPress,
   });
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTapDown: (_) {
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
         HapticFeedback.lightImpact();
         onTap();
+      },
+      onLongPress: onLongPress == null
+          ? null
+          : () {
+        HapticFeedback.mediumImpact();
+        onLongPress!();
       },
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Volume percentage bar
-          Container(
-            width: 36,
-            height: 3,
-            decoration: BoxDecoration(
-              color: WearTheme.surface,
-              borderRadius: BorderRadius.circular(2),
-            ),
-            child: FractionallySizedBox(
-              alignment: Alignment.centerLeft,
-              widthFactor: isMuted ? 0 : volumeLevel / 100,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: isMuted ? WearTheme.textSecondary : const Color(0xFFFFD700),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 4),
-          // Speaker icon button
+          // Speaker icon
           Container(
             padding: const EdgeInsets.all(6),
             decoration: BoxDecoration(
