@@ -30,6 +30,9 @@ class OngoingActivityService : Service() {
         }
 
         fun stop(context: Context) {
+            // Explicitly cancel notification in case onDestroy doesn't run (process kill)
+            val notificationManager = context.getSystemService(NotificationManager::class.java)
+            notificationManager?.cancel(NOTIFICATION_ID)
             context.stopService(Intent(context, OngoingActivityService::class.java))
         }
     }
@@ -65,9 +68,9 @@ class OngoingActivityService : Service() {
     private fun startForegroundWithOngoingActivity(title: String) {
         val pendingIntent = PendingIntent.getActivity(
             this,
-            0,
+            NOTIFICATION_ID,
             Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -97,7 +100,8 @@ class OngoingActivityService : Service() {
     }
 
     override fun onDestroy() {
-        super.onDestroy()
         stopForeground(STOP_FOREGROUND_REMOVE)
+        getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
+        super.onDestroy()
     }
 }

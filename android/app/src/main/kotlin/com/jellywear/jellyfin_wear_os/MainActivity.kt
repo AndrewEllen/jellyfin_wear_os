@@ -36,19 +36,9 @@ class MainActivity: FlutterFragmentActivity() {
         lifecycle.addObserver(ambientObserver)
     }
 
-    override fun onStart() {
-        super.onStart()
-        OngoingActivityService.start(this, "Jellyfin Remote")
-    }
-
-    override fun onStop() {
-        super.onStop()
-        OngoingActivityService.stop(this)
-    }
-
     override fun onDestroy() {
-        super.onDestroy()
         lifecycle.removeObserver(ambientObserver)
+        super.onDestroy()
     }
 
     override fun onGenericMotionEvent(event: MotionEvent?): Boolean {

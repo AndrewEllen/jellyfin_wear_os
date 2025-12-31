@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../core/constants/jellyfin_constants.dart';
+import '../core/services/ongoing_activity_bridge.dart';
 import '../data/jellyfin/jellyfin_client_wrapper.dart';
 import '../data/models/playback_state.dart';
 import '../data/models/session_device.dart';
@@ -10,10 +11,11 @@ import '../data/models/session_device.dart';
 /// State for remote control functionality.
 class RemoteState extends ChangeNotifier {
   final JellyfinClientWrapper _client;
+  final OngoingActivityBridge _ongoingBridge = OngoingActivityBridge();
 
   SessionDevice? _targetSession;
   PlaybackState _playbackState = const PlaybackState();
-  bool _isLoading = false;
+  final bool _isLoading = false;
   String? _errorMessage;
   Timer? _pollTimer;
 
@@ -61,6 +63,7 @@ class RemoteState extends ChangeNotifier {
   /// Clears the target session and stops polling.
   void clearTargetSession() {
     _stopPolling();
+    unawaited(_ongoingBridge.forceStop());
     _targetSession = null;
     _playbackState = const PlaybackState();
     notifyListeners();
@@ -155,6 +158,15 @@ class RemoteState extends ChangeNotifier {
       }
 
       _errorMessage = null;
+
+      // Sync OngoingActivity with current media state
+      if (_targetSession != null) {
+        unawaited(_ongoingBridge.syncFromApi(
+          hasMedia: _playbackState.hasMedia,
+          title: _playbackState.nowPlayingItemName ?? 'Jellyfin Remote',
+        ));
+      }
+
       notifyListeners();
     } catch (e, st) {
       JellyfinConstants.log('_refreshPlaybackState() FAILED', error: e, stack: st);
@@ -181,7 +193,11 @@ class RemoteState extends ChangeNotifier {
 
   /// Stops playback.
   Future<void> stop() async {
-    await _sendPlaystateCommand('Stop');
+    try {
+      await _sendPlaystateCommand('Stop');
+    } finally {
+      await _ongoingBridge.forceStop();
+    }
   }
 
   /// Skips to next track.
